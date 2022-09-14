@@ -57,7 +57,8 @@ public class GoogleMediaItem {
         mediaItem.getMimeType(),
         mediaItem.getId(),
         albumId.orElse(null),
-        false);
+        false,
+        null);
   }
 
   public static PhotoModel convertToPhotoModel(

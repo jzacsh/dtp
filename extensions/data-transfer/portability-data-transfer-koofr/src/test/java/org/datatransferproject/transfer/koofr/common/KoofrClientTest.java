@@ -22,16 +22,18 @@ import org.apache.commons.io.IOUtils;
 import org.datatransferproject.api.launcher.Monitor;
 import org.datatransferproject.spi.transfer.types.DestinationMemoryFullException;
 import org.datatransferproject.spi.transfer.types.InvalidTokenException;
+import org.datatransferproject.transfer.koofr.exceptions.KoofrClientIOException;
 import org.datatransferproject.types.transfer.auth.TokensAndUrlAuthData;
-import org.junit.After;
 import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.invocation.InvocationOnMock;
-import org.mockito.junit.MockitoJUnitRunner;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-@RunWith(MockitoJUnitRunner.class)
+@ExtendWith(MockitoExtension.class)
 public class KoofrClientTest {
 
   private MockWebServer server;
@@ -43,7 +45,7 @@ public class KoofrClientTest {
   private Credential credential;
   private TokensAndUrlAuthData authData;
 
-  @Before
+  @BeforeEach
   public void setUp() throws IOException {
     server = new MockWebServer();
     server.start();
@@ -66,7 +68,7 @@ public class KoofrClientTest {
     client.getOrCreateCredential(authData);
   }
 
-  @After
+  @AfterEach
   public void tearDown() throws Exception {
     server.shutdown();
   }
@@ -175,22 +177,18 @@ public class KoofrClientTest {
   }
 
   @Test
-  public void testFileExistsError() throws Exception {
+  public void testFileExistsError() {
     server.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
 
-    Exception caughtExc = null;
+    KoofrClientIOException caughtExc =
+        Assertions.assertThrows(
+            KoofrClientIOException.class, () -> client.fileExists("/path/to/file"));
 
-    try {
-      client.fileExists("/path/to/file");
-    } catch (Exception exc) {
-      caughtExc = exc;
-    }
-
-    Assert.assertNotNull(caughtExc);
-    Assert.assertEquals(
+    Assertions.assertNotNull(caughtExc);
+    Assertions.assertEquals(
         "Got error code: 500 message: Server Error body: Internal error", caughtExc.getMessage());
 
-    Assert.assertEquals(1, server.getRequestCount());
+    Assertions.assertEquals(1, server.getRequestCount());
   }
 
   @Test
@@ -278,22 +276,18 @@ public class KoofrClientTest {
   }
 
   @Test
-  public void testEnsureFolderError() throws Exception {
+  public void testEnsureFolderError() {
     server.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
 
-    Exception caughtExc = null;
+    KoofrClientIOException caughtExc =
+        Assert.assertThrows(
+            KoofrClientIOException.class, () -> client.ensureFolder("/path/to/folder", "name"));
 
-    try {
-      client.ensureFolder("/path/to/folder", "name");
-    } catch (Exception exc) {
-      caughtExc = exc;
-    }
-
-    Assert.assertNotNull(caughtExc);
-    Assert.assertEquals(
+    Assertions.assertNotNull(caughtExc);
+    Assertions.assertEquals(
         "Got error code: 500 message: Server Error body: Internal error", caughtExc.getMessage());
 
-    Assert.assertEquals(1, server.getRequestCount());
+    Assertions.assertEquals(1, server.getRequestCount());
   }
 
   @Test
@@ -366,22 +360,19 @@ public class KoofrClientTest {
   }
 
   @Test
-  public void testAddDescriptionError() throws Exception {
+  public void testAddDescriptionError() {
     server.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
 
-    Exception caughtExc = null;
+    Exception caughtExc =
+        Assert.assertThrows(
+            KoofrClientIOException.class,
+            () -> client.addDescription("/path/to/folder", "Test description"));
 
-    try {
-      client.addDescription("/path/to/folder", "Test description");
-    } catch (Exception exc) {
-      caughtExc = exc;
-    }
-
-    Assert.assertNotNull(caughtExc);
-    Assert.assertEquals(
+    Assertions.assertNotNull(caughtExc);
+    Assertions.assertEquals(
         "Got error code: 500 message: Server Error body: Internal error", caughtExc.getMessage());
 
-    Assert.assertEquals(1, server.getRequestCount());
+    Assertions.assertEquals(1, server.getRequestCount());
   }
 
   @Test
@@ -584,24 +575,50 @@ public class KoofrClientTest {
   }
 
   @Test
-  public void testUploadFileError() throws Exception {
+  public void testUploadFileError() {
     server.enqueue(new MockResponse().setResponseCode(500).setBody("Internal error"));
 
     final InputStream inputStream = new ByteArrayInputStream(new byte[] {0, 1, 2, 3, 4});
 
-    Exception caughtExc = null;
-
-    try {
-      client.uploadFile("/path/to/folder", "image.jpg", inputStream, "image/jpeg", null, null);
-    } catch (Exception exc) {
-      caughtExc = exc;
-    }
+    Exception caughtExc =
+        Assert.assertThrows(
+            KoofrClientIOException.class,
+            () ->
+                client.uploadFile(
+                    "/path/to/folder", "image.jpg", inputStream, "image/jpeg", null, null));
 
     Assert.assertNotNull(caughtExc);
     Assert.assertEquals(
         "Got error code: 500 message: Server Error body: Internal error", caughtExc.getMessage());
 
     Assert.assertEquals(1, server.getRequestCount());
+  }
+
+  @Test
+  public void testUploadFileNotFound() {
+    server.enqueue(
+        new MockResponse()
+            .setResponseCode(404)
+            .setHeader("Content-Type", "application/json")
+            .setBody(
+                "{\"error\":{\"code\":\"NotFound\",\"message\":\"File not found\"},\"requestId\":\"bad2465e-300e-4079-57ad-46b256e74d21\"}"));
+
+    final InputStream inputStream = new ByteArrayInputStream(new byte[] {0, 1, 2, 3, 4});
+
+    KoofrClientIOException caughtException =
+        Assertions.assertThrows(
+            KoofrClientIOException.class,
+            () ->
+                client.uploadFile(
+                    "/path/to/folder", "image.jpg", inputStream, "image/jpeg", null, null));
+
+    Assertions.assertNotNull(caughtException);
+    Assertions.assertEquals(404, caughtException.getCode());
+    Assertions.assertEquals(
+        "Got error code: 404 message: Client Error body: {\"error\":{\"code\":\"NotFound\",\"message\":\"File not found\"},\"requestId\":\"bad2465e-300e-4079-57ad-46b256e74d21\"}",
+        caughtException.getMessage());
+
+    Assertions.assertEquals(1, server.getRequestCount());
   }
 
   @Test
