@@ -96,6 +96,8 @@ configure(sourceProjects()) {
         testLogging {
             events "passed", "skipped", "failed"
         }
+
+        testLogging.showStandardStreams = true
     }
 
     task sourcesJar(type: Jar) {

@@ -16,10 +16,20 @@
 
 package org.datatransferproject.datatransfer.google.musicModels;
 
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.collect.ImmutableSet;
+import org.datatransferproject.types.common.models.music.MusicPlaylist;
 
 /** Class representing a playlist as returned by the Google Music API. */
+// TODO(jzacsh@) missing equals/hashcode noise; see if siyug would consider using autovalue?
 public class GooglePlaylist {
+  static final String GOOGLE_PLAYLIST_NAME_PREFIX = "playlists/";
+
   @JsonProperty("name")
   private String name;
 
@@ -85,5 +95,28 @@ public class GooglePlaylist {
 
   public void setToken(String token) {
     this.token = token;
+  }
+
+  /**
+   * Converts a scalar array - as recieved from an API response body for example - into a DTP-common
+   * model of comparable usage.
+   */
+  public static ImmutableSet<MusicPlaylist> toMusicPlaylists(GooglePlaylist[] googleMusicPlaylists) {
+    if (googleMusicPlaylists == null || googleMusicPlaylists.length <= 0) {
+      return ImmutableSet.of();
+    }
+
+    Stream<GooglePlaylist> googPlaylistStream = Arrays.stream(googleMusicPlaylists);
+    Set<MusicPlaylist> playlists = googPlaylistStream.map(GooglePlaylist::toMusicPlaylist).collect(Collectors.toSet());
+    return ImmutableSet.copyOf(playlists);
+  }
+
+  public MusicPlaylist toMusicPlaylist() {
+    return new MusicPlaylist(
+        this.getName().substring(GooglePlaylist.GOOGLE_PLAYLIST_NAME_PREFIX.length()),
+        this.getTitle(),
+        this.getDescription(),
+        Instant.ofEpochMilli(this.getCreateTime()),
+        Instant.ofEpochMilli(this.getUpdateTime()));
   }
 }

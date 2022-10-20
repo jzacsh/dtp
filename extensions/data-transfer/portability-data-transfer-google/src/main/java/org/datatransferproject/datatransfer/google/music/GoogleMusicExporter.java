@@ -21,13 +21,15 @@ import com.google.api.client.json.JsonFactory;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableList;
 import java.io.IOException;
-import java.time.Instant;
+import java.util.stream.Collectors;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
+import java.util.Optional;
 import org.datatransferproject.api.launcher.Monitor;
 import org.datatransferproject.datatransfer.google.common.GoogleCredentialFactory;
 import org.datatransferproject.datatransfer.google.musicModels.GooglePlaylist;
@@ -55,14 +57,59 @@ import org.datatransferproject.types.common.models.music.MusicRelease;
 import org.datatransferproject.types.transfer.auth.TokensAndUrlAuthData;
 
 public class GoogleMusicExporter implements Exporter<TokensAndUrlAuthData, MusicContainerResource> {
-  static final String PLAYLIST_TRACK_RELEASE_TOKEN_PREFIX = "playlist:track:release:";
-  static final String PLAYLIST_TRACK_TOKEN_PREFIX = "playlist:track:";
-  static final String PLAYLIST_RELEASE_TOKEN_PREFIX = "playlist:release:";
-  static final String TRACK_RELEASE_TOKEN_PREFIX = "track:release:";
-  static final String PLAYLIST_TOKEN_PREFIX = "playlist:";
-  static final String TRACK_TOKEN_PREFIX = "track:";
-  static final String RELEASE_TOKEN_PREFIX = "release:";
+  /* DO NOT MERGE document this and explain the DTP codebase's practice of passing a paging api's own token
+   * prefixed with DTP's own critical information (what datatype we're working with at the moment).
+   *
+   * Also leave a TODO to maek this better (primitive obsession, galore).
+   */
+  // DO NOT MERGE find a better way to encapsulate this so each adapter uses
+  // its own enum, butgets the benefit of most of this boilerplate logic here
+  public enum TokenPrefix {
+    PLAYLIST_TRACK_RELEASE("playlist:track:release:"),
+    PLAYLIST_TRACK("playlist:track:"),
+    PLAYLIST_ITEM("playlist:item:"), // DO NOT MERGE; siyug@: correct?
+    PLAYLIST_RELEASE("playlist:release:"),
+    TRACK_RELEASE("track:release:"),
+    PLAYLIST("playlist:"),
+    TRACK("track:"),
+    RELEASE("release:"),
+    UNKNOWN("") // invalid prefix
+      ;
 
+    final private String prefix;
+    TokenPrefix(String prefix) {
+      this.prefix = prefix;
+    }
+
+    public static TokenPrefix of(String needle) {
+      for (TokenPrefix prefix : TokenPrefix.values()) {
+        if (prefix.toString().equals(needle)) {
+          return prefix;
+        }
+      }
+      return TokenPrefix.UNKNOWN;
+    }
+
+    public String toString() {
+      return prefix;
+    }
+
+    public static ImmutableSet<String> knownPrefixes() {
+      return ImmutableSet.copyOf(Arrays.stream(TokenPrefix.values()).map(v -> v.toString()).collect(Collectors.toSet()));
+    }
+  }
+
+  private static Optional<TransferPageInfo<TokenPrefix>> toTransferPageInfo(PaginationData paginationData) {
+    return TransferPageInfo.of(paginationData, (pageData) -> {
+      TokenPrefix prefix = TokenPrefix.of(pageData);
+      Preconditions.checkState(prefix != TokenPrefix.UNKNOWN, "invalid token prefix: '%s'", pageData);
+      return prefix;
+    });
+  }
+
+
+  // DO NOT MERGE - this is an inheret property of GooglePlaylist class and belongs over there;
+  // remove references to here and use that class's export instead.
   static final String GOOGLE_PLAYLIST_NAME_PREFIX = "playlists/";
 
   private final GoogleCredentialFactory credentialFactory;
@@ -94,115 +141,122 @@ public class GoogleMusicExporter implements Exporter<TokensAndUrlAuthData, Music
   public ExportResult<MusicContainerResource> export(
       UUID jobId, TokensAndUrlAuthData authData, Optional<ExportInformation> exportInformation)
       throws IOException, InvalidTokenException, PermissionDeniedException {
+    // DO NOT MERGE - why would exportInformation.isEmpty() be true? handle that case
 
+    Optional<TransferPageInfo<TokenPrefix>> transferPageInfo = toTransferPageInfo(exportInformation.get().getPaginationData());
+
+    // DO NOT MERGE: siyu: do we still need to use instance checks like this? use the swiwtch
+    // statement below instead?
     if (exportInformation.get().getContainerResource() instanceof IdOnlyContainerResource) {
       // if ExportInformation is an id only container, this is a request to export playlist items.
       return exportPlaylistItems(
           authData,
           (IdOnlyContainerResource) exportInformation.get().getContainerResource(),
-          Optional.of(exportInformation.get().getPaginationData()));
+          transferPageInfo);
     }
 
-    StringPaginationToken paginationToken =
-        (StringPaginationToken) exportInformation.get().getPaginationData();
+    if (transferPageInfo.isEmpty()) {
+        return emptyExport(); // DO NOT MERGE: is this really possible? taken from siyug's last else block
+    }
 
-    boolean paginationDataPresent = paginationToken != null;
-
-    if (paginationDataPresent && paginationToken.getToken().startsWith(PLAYLIST_TOKEN_PREFIX)) {
-      return exportPlaylists(authData, Optional.of(paginationToken), jobId);
-    } else if (paginationDataPresent && paginationToken.getToken().startsWith(TRACK_TOKEN_PREFIX)) {
-      // TODO: export tracks
-      return new ExportResult<>(ResultType.END, null, null);
-    } else if (paginationDataPresent
-        && paginationToken.getToken().startsWith(RELEASE_TOKEN_PREFIX)) {
-      // TODO: export releases
-      return new ExportResult<>(ResultType.END, null, null);
-    } else {
-      // There is nothing to export.
-      return new ExportResult<>(ResultType.END, null, null);
+    switch (transferPageInfo.get().getResourceType()) {
+      case PLAYLIST:
+        return exportPlaylists(jobId, authData, transferPageInfo.get());
+      case TRACK:
+        throw new UnsupportedOperationException("track exports not yet implemented");
+      case RELEASE:
+        throw new UnsupportedOperationException("release exports not yet implemented");
+      case UNKNOWN:
+        throw new IllegalStateException(String.format(
+            "bad pagination token found: '%s'",
+            transferPageInfo.get().getSerializedOriginal()));
+      default:
+        // There is nothing to export.
+        return emptyExport(); // DO NOT MERGE: is this really possible? taken from siyug's last else block
     }
   }
 
-  // TODO(@jzacsh): Replace pageTokenPrefix and paginationToken with simplified and general class or
-  // functions.
-  @VisibleForTesting
-  ExportResult<MusicContainerResource> exportPlaylists(
-      TokensAndUrlAuthData authData, Optional<PaginationData> paginationData, UUID jobId)
+  private static ExportResult<MusicContainerResource> emptyExport() {
+    return new ExportResult<>(ResultType.END, null, null);
+  }
+
+  private ExportResult<MusicContainerResource> exportPlaylists(
+      UUID jobId, TokensAndUrlAuthData authData, TransferPageInfo pageInfo)
       throws IOException, InvalidTokenException, PermissionDeniedException {
-    Optional<String> paginationToken = Optional.empty();
-    String pageTokenPrefix = "";
-    if (paginationData.isPresent()) {
-      String token = ((StringPaginationToken) paginationData.get()).getToken();
-      Preconditions.checkArgument(
-          token.startsWith(PLAYLIST_TOKEN_PREFIX), "Invalid pagination token %s", token);
-      pageTokenPrefix = token.substring(0, getTokenPrefixLength(token));
-      if (getTokenPrefixLength(token) < token.length()) {
-        paginationToken = Optional.of(token.substring(getTokenPrefixLength(token)));
-      }
-    }
+    Preconditions.checkArgument(
+        pageInfo.getResourceType().equals(TokenPrefix.PLAYLIST),
+        "Invalid resource type ('%s') found in pagination data ('%s')",
+        pageInfo.getResourceType(),
+        pageInfo.getSerializedOriginal());
 
     PlaylistListResponse playlistListResponse =
-        getOrCreateMusicHttpApi(authData).listPlaylists(paginationToken);
+        getOrCreateMusicHttpApi(authData).listPlaylists(pageInfo.getApiPagingToken());
 
-    PaginationData nextPageData;
-    String token = playlistListResponse.getNextPageToken();
-    List<MusicPlaylist> playlists = new ArrayList<>();
-    GooglePlaylist[] googlePlaylists = playlistListResponse.getPlaylists();
-    ResultType resultType = ResultType.END;
+    ImmutableSet<MusicPlaylist> playlists = GooglePlaylist.toMusicPlaylists(playlistListResponse.getPlaylists());
+    final String nextPageToken = playlistListResponse.getNextPageToken();
+    /**
+     * DO NOT MERGE; run this by siyug
+     *
+     *  havePlaylistItemsToTransfer
+     *     :
+     *     :                        haveMorePlaylistsToTransfer
+     *     :                          :
+     *     :                          :
+     *     v                          v
+     * this request has playlists  | have more playlists  |  valid? | explanation
+     * to report for transfer      | to list              |         |
+     * =========================== |===================== |  ====== | ============
+     * true                        |   true               |    Y    | current request's happy path; and another request needed for more
+     * true                        |   false              |    Y    | current request's happy path; but no more requests needed
+     * false                       |   true               |    N    | nonsensical; if no results but
+     *                             :                      :         : page token for _more_ results
+     *                             :                      :         : than we have should've gotten
+     *                             :                      :         : results this time
+     * false                       |   false              |    Y    | no more processing needed
+     */
+    final boolean havePlaylistItemsToTransfer = !playlists.isEmpty(); // "item" is an individual playlist in GMusic parlance
+    final boolean haveMorePlaylistsToTransfer = !Strings.isNullOrEmpty(nextPageToken);
+    Preconditions.checkState(
+        havePlaylistItemsToTransfer || !haveMorePlaylistsToTransfer,
+        "invalid api response: no playlists but yet have paging token to fetch more, per zero-length playlists response and paginationData='%s'",
+        pageInfo.getSerializedOriginal());
 
-    if (Strings.isNullOrEmpty(token)) {
-      nextPageData =
-          new StringPaginationToken(pageTokenPrefix.substring(PLAYLIST_TOKEN_PREFIX.length()));
-    } else {
-      nextPageData = new StringPaginationToken(pageTokenPrefix + token);
-      resultType = ResultType.CONTINUE;
+    if (!havePlaylistItemsToTransfer && !haveMorePlaylistsToTransfer) {
+      return new ExportResult<>(ResultType.END);
     }
-    ContinuationData continuationData = new ContinuationData(nextPageData);
+    Preconditions.checkState(
+        havePlaylistItemsToTransfer,
+        "programmer error: sub-container processing occurring without sub resources");
 
-    if (googlePlaylists != null && googlePlaylists.length > 0) {
-      for (GooglePlaylist googlePlaylist : googlePlaylists) {
-        MusicPlaylist musicPlaylist =
-            new MusicPlaylist(
-                googlePlaylist.getName().substring(GOOGLE_PLAYLIST_NAME_PREFIX.length()),
-                googlePlaylist.getTitle(),
-                googlePlaylist.getDescription(),
-                Instant.ofEpochMilli(googlePlaylist.getCreateTime()),
-                Instant.ofEpochMilli(googlePlaylist.getUpdateTime()));
-        playlists.add(musicPlaylist);
+    ContinuationData continuationData = haveMorePlaylistsToTransfer
+        ? new ContinuationData(pageInfo.toNewStringToken(nextPageToken))
+        : new ContinuationData(null);
 
-        monitor.debug(
-            () ->
-                String.format(
-                    "%s: Google Music exporting playlist: %s", jobId, musicPlaylist.getId()));
-
-        // Add playlist id to continuation data
-        continuationData.addContainerResource(new IdOnlyContainerResource(musicPlaylist.getId()));
-      }
-    }
-
+    // Add all newly listed playlist items' IDs to continuation data
+    playlists.stream().forEach((playlist) -> {
+      continuationData.addContainerResource(new IdOnlyContainerResource(playlist.getId()));
+      monitor.debug(  // DO NOT MERGE - do we need this log line?
+          () ->
+              String.format(
+                  "%s: Google Music exporting playlist: %s", jobId, playlist.getId()));
+    });
     MusicContainerResource containerResource =
         new MusicContainerResource(playlists, null, null, null);
-    return new ExportResult<>(resultType, containerResource, continuationData);
+    return new ExportResult<>(ResultType.CONTINUE, containerResource, continuationData);
   }
 
-  @VisibleForTesting
-  ExportResult<MusicContainerResource> exportPlaylistItems(
+  private ExportResult<MusicContainerResource> exportPlaylistItems(
       TokensAndUrlAuthData authData,
       IdOnlyContainerResource playlistData,
-      Optional<PaginationData> paginationData)
+      Optional<TransferPageInfo<TokenPrefix>> pageInfo)
       throws IOException, InvalidTokenException, PermissionDeniedException {
     String playlistId = playlistData.getId();
-    Optional<String> paginationToken =
-        paginationData.map((PaginationData value) -> ((StringPaginationToken) value).getToken());
 
+    Optional<String> apiPaginationToken = pageInfo.isEmpty()
+        ? Optional.empty()
+        : pageInfo.get().getApiPagingToken();
     PlaylistItemListResponse playlistItemListResponse =
-        getOrCreateMusicHttpApi(authData).listPlaylistItems(playlistId, paginationToken);
-
-    PaginationData nextPageData = null;
-    if (!Strings.isNullOrEmpty(playlistItemListResponse.getNextPageToken())) {
-      nextPageData = new StringPaginationToken(playlistItemListResponse.getNextPageToken());
-    }
-    ContinuationData continuationData = new ContinuationData(nextPageData);
+        getOrCreateMusicHttpApi(authData).listPlaylistItems(playlistId, apiPaginationToken);
 
     MusicContainerResource containerResource = null;
     GooglePlaylistItem[] googlePlaylistItems = playlistItemListResponse.getPlaylistItems();
@@ -214,26 +268,23 @@ public class GoogleMusicExporter implements Exporter<TokensAndUrlAuthData, Music
       containerResource = new MusicContainerResource(null, playlistItems, null, null);
     }
 
-    return new ExportResult<>(ResultType.CONTINUE, containerResource, continuationData);
+    // DO NOT MERGE - convert this to use TransferPageInfo and prefix this with the new TokenPrefix.PLAYLIST_ITEM correctly
+    if (Strings.isNullOrEmpty(playlistItemListResponse.getNextPageToken())) {
+      return new ExportResult<>(
+          ResultType.CONTINUE,
+          containerResource);
+    } else {
+      ContinuationData continuationData = continuationData(TokenPrefix.PLAYLIST_ITEM, playlistItemListResponse.getNextPageToken());
+      return new ExportResult<>(
+          ResultType.CONTINUE,
+          containerResource,
+          continuationData);
+    }
   }
 
-  private int getTokenPrefixLength(String token) {
-    final ImmutableList<String> knownPrefixes =
-        ImmutableList.of(
-            PLAYLIST_TRACK_RELEASE_TOKEN_PREFIX,
-            PLAYLIST_TRACK_TOKEN_PREFIX,
-            PLAYLIST_RELEASE_TOKEN_PREFIX,
-            PLAYLIST_TOKEN_PREFIX,
-            TRACK_RELEASE_TOKEN_PREFIX,
-            TRACK_TOKEN_PREFIX,
-            RELEASE_TOKEN_PREFIX);
-
-    for (String prefix : knownPrefixes) {
-      if (token.startsWith(prefix)) {
-        return prefix.length();
-      }
-    }
-    return 0;
+  /* DO NOT MERGE - move this helper elsewhere; perhaps wherever TokenPrefix ultimately lives? */
+  public static ContinuationData continuationData(TokenPrefix prefix, String apiToken) {
+    return new ContinuationData(new StringPaginationToken(prefix + apiToken));
   }
 
   private List<MusicGroup> createMusicGroups(String[] artistTitles) {
@@ -266,12 +317,14 @@ public class GoogleMusicExporter implements Exporter<TokensAndUrlAuthData, Music
   }
 
   private synchronized GoogleMusicHttpApi getOrCreateMusicHttpApi(TokensAndUrlAuthData authData) {
-    return musicHttpApi == null ? makeMusicHttpApi(authData) : musicHttpApi;
+    if (musicHttpApi == null) {
+      musicHttpApi = makeMusicHttpApi(authData);
+    }
+    return musicHttpApi;
   }
 
   private synchronized GoogleMusicHttpApi makeMusicHttpApi(TokensAndUrlAuthData authData) {
-    Credential credential = credentialFactory.createCredential(authData);
     return new GoogleMusicHttpApi(
-        credential, jsonFactory, monitor, credentialFactory, /* arbitrary writesPerSecond */ 1.0);
+        authData, jsonFactory, monitor, credentialFactory, /* arbitrary writesPerSecond */ 1.0);
   }
 }

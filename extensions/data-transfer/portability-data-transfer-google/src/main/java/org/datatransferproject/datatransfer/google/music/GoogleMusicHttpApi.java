@@ -56,6 +56,7 @@ import org.datatransferproject.datatransfer.google.musicModels.PlaylistItemListR
 import org.datatransferproject.datatransfer.google.musicModels.PlaylistListResponse;
 import org.datatransferproject.spi.transfer.types.InvalidTokenException;
 import org.datatransferproject.spi.transfer.types.PermissionDeniedException;
+import org.datatransferproject.types.transfer.auth.TokensAndUrlAuthData;
 
 /**
  * GoogleMusicHttpApi makes HTTP requests to read and write to the public Google Music's "Music
@@ -86,6 +87,20 @@ public class GoogleMusicHttpApi {
   private final Monitor monitor;
   private final GoogleCredentialFactory credentialFactory;
   private final RateLimiter writeRateLimiter;
+
+  GoogleMusicHttpApi(
+      TokensAndUrlAuthData tokensAndUrlAuthData,
+      JsonFactory jsonFactory,
+      Monitor monitor,
+      GoogleCredentialFactory credentialFactory,
+      double writesPerSecond) {
+    this(
+        credentialFactory.createCredential(tokensAndUrlAuthData),
+        jsonFactory,
+        monitor,
+        credentialFactory,
+        writesPerSecond);
+  }
 
   GoogleMusicHttpApi(
       Credential credential,
