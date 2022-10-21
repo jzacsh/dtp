@@ -62,8 +62,11 @@ public class GoogleMusicExporter implements Exporter<TokensAndUrlAuthData, Music
    *
    * Also leave a TODO to maek this better (primitive obsession, galore).
    */
-  // DO NOT MERGE find a better way to encapsulate this so each adapter uses
-  // its own enum, butgets the benefit of most of this boilerplate logic here
+  // DO NOT MERGE: check with siyug that we *really* want these strings; we probably _don't_ (ie:
+  // we're probably never _actually_ stripping back chunk by chunk (eg: taking a
+  // "playlist:track:release:", stripping the tail off and continuing on automatically with a
+  // "playlist:track:" instead), therefore we can just rely on Enum::toString() and we'll be
+  // utilizing "PLAYLIST_TRACK_RELEASE" as a string instead.
   public enum TokenPrefix {
     PLAYLIST_TRACK_RELEASE("playlist:track:release:"),
     PLAYLIST_TRACK("playlist:track:"),
@@ -194,6 +197,13 @@ public class GoogleMusicExporter implements Exporter<TokensAndUrlAuthData, Music
 
     ImmutableSet<MusicPlaylist> playlists = GooglePlaylist.toMusicPlaylists(playlistListResponse.getPlaylists());
     final String nextPageToken = playlistListResponse.getNextPageToken();
+
+    // DO NOT MERGE; assuming I understood siyug's original implementation correctly (see truth
+    // table below) then DTP really needs to write wrappers for ExportResult (and consider making
+    // all ExportResult constructors private) that will build for these cases correctly; eg:
+    // - have a token _and_ have data? call and return ExportResult.of(C extends ContainerResource, TransferPage);
+    // - have no token but have data? call and return ExportResult.of(C extends ContainerResource);
+    // - have no data (and obviously no token)? call and return ExportResult.of();
     /**
      * DO NOT MERGE; run this by siyug
      *
