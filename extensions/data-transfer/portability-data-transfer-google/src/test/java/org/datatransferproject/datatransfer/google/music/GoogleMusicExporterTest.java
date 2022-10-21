@@ -29,6 +29,7 @@ import static org.mockito.Mockito.when;
 import com.google.api.client.json.gson.GsonFactory;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -211,7 +212,7 @@ public class GoogleMusicExporterTest {
                 .map(MusicPlaylistItem::getTrack)
                 .collect(Collectors.toList()))
         .containsExactly(
-            new MusicRecording("t1_isrc", null, 0L, new MusicRelease("r1_icpn", null, null), null));
+            new MusicRecording("t1_isrc", null, 0L, new MusicRelease("r1_icpn", null, Collections.emptyList()), Collections.emptyList()));
   }
 
   @Test
