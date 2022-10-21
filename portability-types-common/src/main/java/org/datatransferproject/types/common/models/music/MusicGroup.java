@@ -23,6 +23,7 @@ import com.google.common.base.MoreObjects;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.Collections;
 
 /**
  * POJO for https://schema.org/MusicGroup
@@ -48,7 +49,7 @@ public class MusicGroup {
   // DO NOT MERGE - add some lightweight javadoc; eg: see GooglePlaylist.toMusicPlaylists
   public static List<MusicGroup> fromArray(String[] names) {
     if (names == null) {
-      return null;
+      return Collections.emptyList();
     }
     return Arrays
         .stream(names)
