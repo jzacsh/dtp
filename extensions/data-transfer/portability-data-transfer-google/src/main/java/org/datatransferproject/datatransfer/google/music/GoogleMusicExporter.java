@@ -49,11 +49,8 @@ import org.datatransferproject.types.common.PaginationData;
 import org.datatransferproject.types.common.StringPaginationToken;
 import org.datatransferproject.types.common.models.IdOnlyContainerResource;
 import org.datatransferproject.types.common.models.music.MusicContainerResource;
-import org.datatransferproject.types.common.models.music.MusicGroup;
 import org.datatransferproject.types.common.models.music.MusicPlaylist;
 import org.datatransferproject.types.common.models.music.MusicPlaylistItem;
-import org.datatransferproject.types.common.models.music.MusicRecording;
-import org.datatransferproject.types.common.models.music.MusicRelease;
 import org.datatransferproject.types.transfer.auth.TokensAndUrlAuthData;
 
 public class GoogleMusicExporter implements Exporter<TokensAndUrlAuthData, MusicContainerResource> {
@@ -262,68 +259,35 @@ public class GoogleMusicExporter implements Exporter<TokensAndUrlAuthData, Music
       throws IOException, InvalidTokenException, PermissionDeniedException {
     String playlistId = playlistData.getId();
 
-    Optional<String> apiPaginationToken = pageInfo.isEmpty()
-        ? Optional.empty()
-        : pageInfo.get().getApiPagingToken();
-    PlaylistItemListResponse playlistItemListResponse =
-        getOrCreateMusicHttpApi(authData).listPlaylistItems(playlistId, apiPaginationToken);
+    PlaylistItemListResponse playlistItemListResponse = getOrCreateMusicHttpApi(authData)
+        .listPlaylistItems(
+            playlistId,
+            TransferPageInfo.getApiPaginationToken(pageInfo));
 
-    MusicContainerResource containerResource = null;
-    GooglePlaylistItem[] googlePlaylistItems = playlistItemListResponse.getPlaylistItems();
-    List<MusicPlaylistItem> playlistItems = new ArrayList<>();
-    if (googlePlaylistItems != null && googlePlaylistItems.length > 0) {
-      for (GooglePlaylistItem googlePlaylistItem : googlePlaylistItems) {
-        playlistItems.add(convertPlaylistItem(playlistId, googlePlaylistItem));
-      }
-      containerResource = new MusicContainerResource(null, playlistItems, null, null);
+    ImmutableList<MusicPlaylistItem> playlistItems = GooglePlaylistItem
+        .toPlaylistItems(playlistId, playlistItemListResponse.getPlaylistItems());
+    if (playlistItems.isEmpty()) {
+      return emptyExport();
     }
 
-    // DO NOT MERGE - convert this to use TransferPageInfo and prefix this with the new TokenPrefix.PLAYLIST_ITEM correctly
+    MusicContainerResource containerResource = new MusicContainerResource(null, playlistItems, null, null);
     if (Strings.isNullOrEmpty(playlistItemListResponse.getNextPageToken())) {
       return new ExportResult<>(
           ResultType.CONTINUE,
           containerResource);
     } else {
-      ContinuationData continuationData = continuationData(TokenPrefix.PLAYLIST_ITEM, playlistItemListResponse.getNextPageToken());
       return new ExportResult<>(
           ResultType.CONTINUE,
           containerResource,
-          continuationData);
+          continuationData(
+              TokenPrefix.PLAYLIST_ITEM,
+              playlistItemListResponse.getNextPageToken()));
     }
   }
 
   /* DO NOT MERGE - move this helper elsewhere; perhaps wherever TokenPrefix ultimately lives? */
   public static ContinuationData continuationData(TokenPrefix prefix, String apiToken) {
     return new ContinuationData(new StringPaginationToken(prefix + apiToken));
-  }
-
-  private List<MusicGroup> createMusicGroups(String[] artistTitles) {
-    if (artistTitles == null) {
-      return null;
-    }
-    List<MusicGroup> musicGroups = new ArrayList<>();
-    for (String artistTitle : artistTitles) {
-      musicGroups.add(new MusicGroup(artistTitle));
-    }
-    return musicGroups;
-  }
-
-  private MusicPlaylistItem convertPlaylistItem(
-      String playlistId, GooglePlaylistItem googlePlaylistItem) {
-    GoogleTrack track = googlePlaylistItem.getTrack();
-    GoogleRelease release = track.getRelease();
-    return new MusicPlaylistItem(
-        new MusicRecording(
-            track.getIsrc(),
-            track.getTrackTitle(),
-            track.getDurationMillis(),
-            new MusicRelease(
-                release.getIcpn(),
-                release.getReleaseTitle(),
-                createMusicGroups(release.getArtistTitles())),
-            createMusicGroups(track.getArtistTitles())),
-        playlistId,
-        googlePlaylistItem.getOrder());
   }
 
   private synchronized GoogleMusicHttpApi getOrCreateMusicHttpApi(TokensAndUrlAuthData authData) {

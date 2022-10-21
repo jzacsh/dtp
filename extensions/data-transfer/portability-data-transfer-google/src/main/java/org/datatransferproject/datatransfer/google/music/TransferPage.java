@@ -4,7 +4,6 @@ package org.datatransferproject.datatransfer.google.music;
 import org.apache.commons.lang3.tuple.Pair;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
-import com.google.common.collect.ImmutableSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
@@ -41,6 +40,12 @@ final class TransferPageInfo<ResourceType> {
 
   public Optional<String> getApiPagingToken() {
     return apiPagingToken;
+  }
+
+  public static <R> Optional<String> getApiPaginationToken(Optional<TransferPageInfo<R>> page) {
+    return page.isEmpty()
+        ? Optional.empty()
+        : page.get().getApiPagingToken();
   }
 
   /* DO NOT MERGE explain this is for debugging */

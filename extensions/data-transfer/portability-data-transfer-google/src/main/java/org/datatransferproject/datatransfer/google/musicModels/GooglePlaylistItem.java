@@ -17,7 +17,14 @@
 package org.datatransferproject.datatransfer.google.musicModels;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.collect.ImmutableList;
+import java.util.Arrays;
 import java.util.Objects;
+import java.util.stream.Collectors;
+import org.datatransferproject.types.common.models.music.MusicGroup;
+import org.datatransferproject.types.common.models.music.MusicPlaylistItem;
+import org.datatransferproject.types.common.models.music.MusicRecording;
+import org.datatransferproject.types.common.models.music.MusicRelease;
 
 /** Class representing a playlist item as returned by the Google Music API. */
 public class GooglePlaylistItem {
@@ -58,5 +65,34 @@ public class GooglePlaylistItem {
   @Override
   public int hashCode() {
     return Objects.hash(getTrack(), getOrder());
+  }
+
+  // DO NOT MERGE - add some lightweight javadoc; eg: see GooglePlaylist.toMusicPlaylists
+  public static ImmutableList<MusicPlaylistItem> toPlaylistItems(String playlistId, GooglePlaylistItem[] googlePlaylistItems) {
+    if (googlePlaylistItems == null || googlePlaylistItems.length <= 0) {
+      return ImmutableList.of();
+    }
+
+    return Arrays
+        .stream(googlePlaylistItems)
+        .map(item -> item.toPlaylistItem(playlistId, item))
+        .collect(ImmutableList.toImmutableList());
+  }
+
+  public MusicPlaylistItem toPlaylistItem(String playlistId, GooglePlaylistItem googlePlaylistItem) {
+    GoogleTrack track = googlePlaylistItem.getTrack();
+    GoogleRelease release = track.getRelease();
+    return new MusicPlaylistItem(
+        new MusicRecording(
+            track.getIsrc(),
+            track.getTrackTitle(),
+            track.getDurationMillis(),
+            new MusicRelease(
+                release.getIcpn(),
+                release.getReleaseTitle(),
+                MusicGroup.fromArray(release.getArtistTitles())),
+            MusicGroup.fromArray(track.getArtistTitles())),
+        playlistId,
+        googlePlaylistItem.getOrder());
   }
 }

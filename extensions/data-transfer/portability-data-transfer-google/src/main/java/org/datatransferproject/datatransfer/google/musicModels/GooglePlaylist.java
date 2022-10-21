@@ -106,9 +106,10 @@ public class GooglePlaylist {
       return ImmutableSet.of();
     }
 
-    Stream<GooglePlaylist> googPlaylistStream = Arrays.stream(googleMusicPlaylists);
-    Set<MusicPlaylist> playlists = googPlaylistStream.map(GooglePlaylist::toMusicPlaylist).collect(Collectors.toSet());
-    return ImmutableSet.copyOf(playlists);
+    return Arrays
+        .stream(googleMusicPlaylists)
+        .map(GooglePlaylist::toMusicPlaylist)
+        .collect(ImmutableSet.toImmutableSet());
   }
 
   public MusicPlaylist toMusicPlaylist() {

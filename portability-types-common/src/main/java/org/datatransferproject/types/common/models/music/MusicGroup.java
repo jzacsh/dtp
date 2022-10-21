@@ -20,6 +20,10 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.MoreObjects;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
 /**
  * POJO for https://schema.org/MusicGroup
  */
@@ -39,5 +43,16 @@ public class MusicGroup {
   @Override
   public String toString() {
     return MoreObjects.toStringHelper(this).add("name", getName()).toString();
+  }
+
+  // DO NOT MERGE - add some lightweight javadoc; eg: see GooglePlaylist.toMusicPlaylists
+  public static List<MusicGroup> fromArray(String[] names) {
+    if (names == null) {
+      return null;
+    }
+    return Arrays
+        .stream(names)
+        .map(name -> new MusicGroup(name))
+        .collect(Collectors.toList());
   }
 }
