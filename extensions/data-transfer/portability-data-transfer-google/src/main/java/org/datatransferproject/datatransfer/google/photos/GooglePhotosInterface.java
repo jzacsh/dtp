@@ -51,6 +51,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import org.datatransferproject.api.launcher.Monitor;
@@ -60,10 +61,14 @@ import org.datatransferproject.datatransfer.google.mediaModels.BatchMediaItemRes
 import org.datatransferproject.datatransfer.google.mediaModels.GoogleAlbum;
 import org.datatransferproject.datatransfer.google.mediaModels.GoogleMediaItem;
 import org.datatransferproject.datatransfer.google.mediaModels.MediaItemSearchResponse;
+import org.datatransferproject.datatransfer.google.mediaModels.NewMediaItem;
 import org.datatransferproject.datatransfer.google.mediaModels.NewMediaItemUpload;
+import org.datatransferproject.spi.cloud.storage.TemporaryPerJobDataStore.InputStreamWrapper;
+import org.datatransferproject.spi.transfer.idempotentexecutor.IdempotentImportExecutor;
 import org.datatransferproject.spi.transfer.types.InvalidTokenException;
 import org.datatransferproject.spi.transfer.types.PermissionDeniedException;
 import org.datatransferproject.spi.transfer.types.UploadErrorException;
+import org.datatransferproject.types.common.models.photos.PhotoModel;
 
 public class GooglePhotosInterface {
 
@@ -154,6 +159,125 @@ public class GooglePhotosInterface {
 
     return makePostRequest(BASE_URL + "albums", Optional.empty(), Optional.empty(), content,
         GoogleAlbum.class);
+  }
+
+  /**
+   * Uploads the batch, `photos`, via HTTP APIs.
+   *
+   * Returns a cummulative byte count of all the photos that were uploaded.
+   */
+  // TODO(aksingh737,jzacsh) if we consolidate underlying gphtoos SDK approaches (eg by deleting
+  // direct calls to GooglePhotosInterface and PhotosLibraryClient in favor of GPhotosUpload), then
+  // this and the GoogleVideosInterface.uploadBatchOfVideos function can be de-duped. Right now they
+  // interact with differnet APIs and while maybe possible to de-dupe them _as is_, it's probably
+  // better to spend time on de-duping their underlying SDK wrappers first (and _then_ see if
+  // they can be consolidated).
+  public long uploadBatchOfPhotos(
+      UUID jobId,
+      List<PhotoModel> photos,
+      IdempotentImportExecutor executor,
+      // DO NOT MERGE reconsider how to get access to connectionProvider (given this is a shared
+      // interface with the Video logic); eg: maybe this is easily solved by using a closure at the
+      // call site?
+      ConnectionProvider connectionProvider,
+      String albumId)
+      throws Exception {
+    final ArrayList<NewMediaItem> mediaItems = new ArrayList<>();
+    final HashMap<String, PhotoModel> uploadTokenToDataId = new HashMap<>();
+    final HashMap<String, Long> uploadTokenToLength = new HashMap<>();
+
+    // TODO: resumable uploads https://developers.google.com/photos/library/guides/resumable-uploads
+    //  Resumable uploads would allow the upload of larger media that don't fit in memory.  To do
+    //  this however, seems to require knowledge of the total file size.
+    for (PhotoModel photo : photos) {
+      Long size = null;
+      try {
+        InputStreamWrapper streamWrapper = connectionProvider
+            .getInputStreamForItem(jobId, photo);
+
+        try (InputStream s = streamWrapper.getStream()) {
+          String uploadToken = uploadMediaContent(s, photo.getSha1());
+          String description = GooglePhotosImportUtils.cleanDescription(photo.getDescription());
+          mediaItems.add(new NewMediaItem(description, uploadToken));
+          uploadTokenToDataId.put(uploadToken, photo);
+          size = streamWrapper.getBytes();
+          uploadTokenToLength.put(uploadToken, size);
+        } catch (UploadErrorException e) {
+          if (e.getMessage().contains(ERROR_HASH_MISMATCH)) {
+            monitor.severe(
+                () -> format("%s: SHA-1 (%s) mismatch during upload", jobId, photo.getSha1()));
+          }
+
+          Long finalSize = size;
+          executor.importAndSwallowIOExceptions(photo, p -> ItemImportResult.error(e, finalSize));
+        }
+
+        try {
+          if (photo.isInTempStore()) {
+            jobStore.removeData(jobId, photo.getFetchableUrl());
+          }
+        } catch (Exception e) {
+          // Swallow the exception caused by Remove data so that existing flows continue
+          monitor.info(
+              () ->
+                  format(
+                      "%s: Exception swallowed in removeData call for localPath %s",
+                      jobId, photo.getFetchableUrl()),
+              e);
+        }
+      } catch (IOException exception) {
+        Long finalSize = size;
+        executor.importAndSwallowIOExceptions(
+            photo, p -> ItemImportResult.error(exception, finalSize));
+      }
+    }
+
+    if (mediaItems.isEmpty()) {
+      // Either we were not passed in any videos or we failed upload on all of them.
+      return 0L;
+    }
+
+    long totalBytes = 0L;
+    NewMediaItemUpload uploadItem = new NewMediaItemUpload(albumId, mediaItems);
+    try {
+      BatchMediaItemResponse photoCreationResponse = createPhotos(uploadItem);
+      Preconditions.checkNotNull(photoCreationResponse);
+      NewMediaItemResult[] mediaItemResults = photoCreationResponse.getResults();
+      Preconditions.checkNotNull(mediaItemResults);
+      for (NewMediaItemResult mediaItem : mediaItemResults) {
+        PhotoModel photo = uploadTokenToDataId.get(mediaItem.getUploadToken());
+        totalBytes +=
+            processMediaResult(
+                mediaItem, photo, executor, uploadTokenToLength.get(mediaItem.getUploadToken()));
+        uploadTokenToDataId.remove(mediaItem.getUploadToken());
+      }
+
+      if (!uploadTokenToDataId.isEmpty()) {
+        for (Entry<String, PhotoModel> entry : uploadTokenToDataId.entrySet()) {
+          PhotoModel photo = entry.getValue();
+          executor.importAndSwallowIOExceptions(
+              photo,
+              p ->
+                  ItemImportResult.error(
+                      new IOException("Photo was missing from results list."),
+                      uploadTokenToLength.get(entry.getKey())));
+        }
+      }
+    } catch (IOException e) {
+      if (StringUtils.contains(
+          e.getMessage(), "The remaining storage in the user's account is not enough")) {
+        throw new DestinationMemoryFullException("Google destination storage full", e);
+      } else if (StringUtils.contains(
+          e.getMessage(), "The provided ID does not match any albums")) {
+        // which means the album was likely deleted by the user
+        // we skip this batch and log some data to understand it better
+        logMissingAlbumDetails(albumId, e);
+      } else {
+        throw e;
+      }
+    }
+
+    return totalBytes;
   }
 
   public String uploadMediaContent(InputStream inputStream, @Nullable String sha1)
@@ -338,5 +462,21 @@ public class GooglePhotosInterface {
 
   private interface SupplierWithIO<T> {
     T getWithIO() throws IOException;
+  }
+
+  private void logMissingAlbumDetails(String albumId, IOException e) {
+    monitor.info(
+        () -> format("Can't find album during createPhotos call, album is likely deleted"), e);
+    try {
+      GoogleAlbum album = getAlbum(albumId);
+      monitor.debug(
+          () ->
+              format(
+                  "Can't find album during createPhotos call, album info: isWriteable %b, mediaItemsCount %d",
+                  album.getIsWriteable(), album.getMediaItemsCount()),
+          e);
+    } catch (Exception ex) {
+      monitor.info(() -> format("Can't find album during getAlbum call"), ex);
+    }
   }
 }
