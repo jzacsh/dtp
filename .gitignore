@@ -1,6 +1,8 @@
 .gradle/
 *.log
 
+# DO NOT MERGE - jon just demo'ing github UI
+
 secrets.csv
 #!distributions/demo-server/src/main/resources/
 #!distributions/demo-server/src/main/resources/demo-selfsigned-keystore.jks
