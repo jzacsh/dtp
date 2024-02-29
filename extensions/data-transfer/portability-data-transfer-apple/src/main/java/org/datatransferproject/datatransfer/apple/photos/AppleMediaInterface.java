@@ -19,6 +19,8 @@ package org.datatransferproject.datatransfer.apple.photos;
 import static org.apache.http.HttpStatus.SC_BAD_REQUEST;
 import static org.apache.http.HttpStatus.SC_CONFLICT;
 import static org.apache.http.HttpStatus.SC_INSUFFICIENT_STORAGE;
+import static org.apache.http.HttpStatus.SC_MOVED_TEMPORARILY;
+import static org.apache.http.HttpStatus.SC_MOVED_PERMANENTLY;
 import static org.apache.http.HttpStatus.SC_INTERNAL_SERVER_ERROR;
 import static org.apache.http.HttpStatus.SC_NOT_FOUND;
 import static org.apache.http.HttpStatus.SC_OK;
@@ -26,6 +28,8 @@ import static org.apache.http.HttpStatus.SC_PRECONDITION_FAILED;
 import static org.apache.http.HttpStatus.SC_SERVICE_UNAVAILABLE;
 import static org.apache.http.HttpStatus.SC_UNAUTHORIZED;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.UnmodifiableIterator;
@@ -51,6 +55,7 @@ import org.datatransferproject.datatransfer.apple.constants.ApplePhotosConstants
 import org.datatransferproject.datatransfer.apple.constants.AuditKeys;
 import org.datatransferproject.datatransfer.apple.constants.Headers;
 import org.datatransferproject.datatransfer.apple.exceptions.AppleContentException;
+import org.datatransferproject.datatransfer.apple.exceptions.HttpException;
 import org.datatransferproject.datatransfer.apple.photos.photosproto.PhotosProtocol;
 import org.datatransferproject.datatransfer.apple.photos.photosproto.PhotosProtocol.AuthorizeUploadRequest;
 import org.datatransferproject.datatransfer.apple.photos.photosproto.PhotosProtocol.AuthorizeUploadResponse;
@@ -167,50 +172,117 @@ public class AppleMediaInterface implements AppleBaseInterface {
     return getUploadUrlsResponse;
   }
 
-  // download from external server then upload to apple
-  public Map<String, String> uploadContent(
-      @NotNull final Map<String, String> dataIdToDownloadURLMap,
-      @NotNull final List<AuthorizeUploadResponse> authorizeUploadResponseList) {
-    final Map<String, String> dataIdToUploadResponseMap = new HashMap<>();
-    for (AuthorizeUploadResponse authorizeUploadResponse : authorizeUploadResponseList) {
-      final String dataId = authorizeUploadResponse.getDataId();
-      final String downloadURL = dataIdToDownloadURLMap.get(dataId);
-      try {
-        final StreamingContentClient downloadClient =
-          new StreamingContentClient(
-            downloadURL, StreamingContentClient.StreamingMode.DOWNLOAD, monitor);
-        final StreamingContentClient uploadClient =
-          new StreamingContentClient(
-            authorizeUploadResponse.getUploadUrl(),
-            StreamingContentClient.StreamingMode.UPLOAD, monitor);
-
-        final int maxRequestBytes = ApplePhotosConstants.contentRequestLength;
-        int totalSize = 0;
-        for (byte[] data = downloadClient.downloadBytes(maxRequestBytes);
-            data != null;
-            data = downloadClient.downloadBytes(maxRequestBytes)) {
-          totalSize += data.length;
-
-          if (totalSize > ApplePhotosConstants.maxMediaTransferByteSize) {
-            uploadClient.completeUpload();
-            throw new AppleContentException(getApplePhotosImportThrowingMessage("file too large to import to Apple", ImmutableMap.of(
-                    AuditKeys.dataId, dataId,
-                    AuditKeys.downloadURL, downloadURL,
-                    AuditKeys.uploadUrl, authorizeUploadResponse.getUploadUrl())));
-          }
-
-          uploadClient.uploadBytes(data);
-          if (data.length < maxRequestBytes) {
-            break;
-          }
-        }
-        final String singleFileUploadResponse = uploadClient.completeUpload();
-        dataIdToUploadResponseMap.put(dataId, singleFileUploadResponse);
-      } catch (AppleContentException | IOException e) {
-        continue;
-      }
+  /** Map from original dataId to AppleNewUpload for each `authorizedUpload`. */
+  // Note this only exists because we can't have a lambda throw an Exception
+  @VisibleForTesting
+  public ImmutableMap<String, AppleNewUpload> uploadOrSkipAll(
+      UUID jobId,
+      IdempotentImportExecutor idempotentImportExecutor,
+      List<ApplePreUpload> authorizedUploads,
+      Map<String, DownloadableFile> dataIdToDownloadableFiles,
+      Map<String, URL> dataIdToDownloadURLMap) throws Exception {
+    final List<Optional<AppleNewUpload>> uploadResults = new ArrayList<>();
+    for (ApplePreUpload applePreUpload : authorizedUploads) {
+      uploadResults.add(uploadOrSkip(
+          jobId,
+          idempotentImportExecutor,
+          checkNotNull(
+              dataIdToDownloadURLMap.get(applePreUpload.authorizeUploadResponse().getDataId()),
+              "dataIdToDownloadURLMap somehow incomplete, missing key for dataid=%s",
+              applePreUpload.authorizeUploadResponse().getDataId()),
+          checkNotNull(
+              dataIdToDownloadableFiles.get(applePreUpload.authorizeUploadResponse().getDataId()),
+              "dataIdToDownloadableFiles somehow incomplete, missing dataid=%s produced by PhotosProtocol.AuthorizeUploadResponse",
+              applePreUpload.authorizeUploadResponse().getDataId()),
+          applePreUpload));
     }
-    return dataIdToUploadResponseMap;
+
+    return uploadResults.stream()
+       .flatMap(Optional::stream)
+       .collect(ImmutableMap.toImmutableMap(
+            AppleNewUpload::originatingDtpDataId,
+            appleNewUpload -> appleNewUpload));
+  }
+
+  private static Optional<AppleNewUpload> uploadOrSkip(
+      UUID jobId,
+      IdempotentImportExecutor idempotentImportExecutor,
+      URL downloadURL,
+      DownloadableFile downloadableFile,
+      ApplePreUpload applePreUpload) throws Exception {
+    String singleFileUploadResponse;
+    try {
+      singleFileUploadResponse = uploadContent(downloadURL, applePreUpload);
+    } catch (AppleContentException | HttpException e) {
+      markDownloadableFileFailed(
+          "perform download[origin]/upload[Apple] chain of steps",
+          jobId,
+          downloadableFile,
+          idempotentImportExecutor,
+          ImmutableMap.of(AuditKeys.errorCode, String.valueOf(applePreUpload.authorizeUploadResponse().getStatus().getCode())),
+          e);
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        AppleNewUpload
+            .builder()
+            .setDownloadableFile(downloadableFile)
+            .setOriginatingDtpDataId(applePreUpload.authorizeUploadResponse().getDataId())
+            .setNewlyStartedAppleDataId(singleFileUploadResponse)
+            .build()
+        );
+  }
+
+  /**
+   * Downloads a single file from `downloadURL` and uploads it to Apple severs.
+   *
+   * @return Apple servers' own newly created data ID.
+   */
+ private static String uploadContent(
+    @NotNull URL downloadURL,
+    @NotNull ApplePreUpload applePreUpload) throws HttpException, AppleContentException {
+      final String dataId = applePreUpload.authorizeUploadResponse().getDataId();
+      try {
+        try (
+          final StreamingContentClient downloadClient =
+              new StreamingContentClient(
+                downloadURL, StreamingContentClient.StreamingMode.DOWNLOAD, monitor);
+          final StreamingContentClient uploadClient =
+            new StreamingContentClient(
+              applePreUpload.uploadUrl(),
+              StreamingContentClient.StreamingMode.UPLOAD, monitor)) {
+
+          final int maxRequestBytes = ApplePhotosConstants.contentRequestLength;
+          int totalSize = 0;
+          for (byte[] data = downloadClient.downloadBytes(maxRequestBytes);
+              data != null;
+              data = downloadClient.downloadBytes(maxRequestBytes)) {
+            totalSize += data.length;
+
+            if (totalSize > ApplePhotosConstants.maxMediaTransferByteSize) {
+              uploadClient.completeUpload();
+              throw new AppleContentException(
+                  getApplePhotosImportThrowingMessage(
+                      String.format(
+                          "file too large to import to Apple: %d bytes so far but DTP's encoded max allowed is only %d",
+                          totalSize, ApplePhotosConstants.maxMediaTransferByteSize),
+                      ImmutableMap.of(
+                        AuditKeys.dataId, dataId,
+                        AuditKeys.downloadURL, downloadURL.toString(),
+                        AuditKeys.uploadUrl, applePreUpload.authorizeUploadResponse().getUploadUrl())));
+            }
+
+            uploadClient.uploadBytes(data);
+            if (data.length < maxRequestBytes) {
+              return uploadClient.completeUpload();
+            }
+          }
+          return uploadClient.completeUpload();
+        }
+      } catch (HttpException e) {
+        throw new AppleContentException("initializing upload/download connections", e);
+      }
   }
 
   public CreateMediaResponse createMedia(
@@ -276,31 +348,31 @@ public class AppleMediaInterface implements AppleBaseInterface {
         AuditKeys.errorCode, con.getResponseCode(),
       e);
 
-      convertAndThrowException(e, con);
+      convertAndThrowException(e, con, "POST to Apple servers");
     } finally {
       con.disconnect();
     }
     return responseString;
   }
 
-  private void convertAndThrowException(@NotNull final IOException e, @NotNull final HttpURLConnection con)
+  private void convertAndThrowException(@NotNull final IOException e, @NotNull final HttpURLConnection con, String detailMessage)
       throws IOException, CopyExceptionWithFailureReason {
 
     switch (con.getResponseCode()) {
       case SC_UNAUTHORIZED:
-        throw new UnconfirmedUserException(getApplePhotosImportThrowingMessage("Unauthorized iCloud User"), e);
+        throw new UnconfirmedUserException(detailMessage, badConnectionToAppleError(con, "Unauthorized iCloud User", e));
       case SC_PRECONDITION_FAILED:
-        throw new PermissionDeniedException(getApplePhotosImportThrowingMessage("Permission Denied"), e);
+        throw new PermissionDeniedException(detailMessage, badConnectionToAppleError(con, "Permission Denied", e));
       case SC_NOT_FOUND:
-        throw new DestinationNotFoundException(getApplePhotosImportThrowingMessage("iCloud Photos Library not found"), e);
+        throw new DestinationNotFoundException(detailMessage, badConnectionToAppleError(con, "iCloud Photos Library not found", e));
       case SC_INSUFFICIENT_STORAGE:
-        throw new DestinationMemoryFullException(getApplePhotosImportThrowingMessage("iCloud Storage is full"), e);
+        throw new DestinationMemoryFullException(detailMessage, badConnectionToAppleError(con, "iCloud Storage is full", e));
       case SC_SERVICE_UNAVAILABLE:
-        throw new IOException(getApplePhotosImportThrowingMessage("DTP import service unavailable"), e);
+        throw new IOException(detailMessage, badConnectionToAppleError(con, "DTP import service unavailable", e));
       case SC_BAD_REQUEST:
-        throw new IOException(getApplePhotosImportThrowingMessage("Bad request sent to iCloud Photos import api"), e);
+        throw new IOException(detailMessage, badConnectionToAppleError(con, "Bad request sent to iCloud Photos import api", e));
       case SC_INTERNAL_SERVER_ERROR:
-        throw new IOException(getApplePhotosImportThrowingMessage("Internal server error in iCloud Photos service"), e);
+        throw new IOException(detailMessage, badConnectionToAppleError(con, "Internal server error in iCloud Photos service", e));
       case SC_OK:
         break;
       default:
@@ -355,7 +427,6 @@ public class AppleMediaInterface implements AppleBaseInterface {
       monitor.debug(() -> "Successfully refreshed token");
 
     } catch (ParseException | IOException | CopyExceptionWithFailureReason e) {
-
       throw new InvalidTokenException(getApplePhotosImportThrowingMessage("Unable to refresh token"), e);
     }
   }
@@ -459,6 +530,7 @@ public class AppleMediaInterface implements AppleBaseInterface {
 
   // In current logic, we will continue to import the other media when we meet an error. We will
   // save then throw the error in the end.
+  // TODO fix primitive-usage: dataClass ought to be of type DataVertical.
   public Map<String, Long> importAllMedia(
       UUID jobId,
       IdempotentImportExecutor idempotentImportExecutor,
@@ -493,6 +565,9 @@ public class AppleMediaInterface implements AppleBaseInterface {
   }
 
   // return {BYTES_KEY: Long, COUNT_KEY: Long}
+  // TODO make this private and only arrange on importAllMedia in unit tests that depend on
+  // AppleMediaInterface.
+  @VisibleForTesting
   Map<String, Long> importMediaBatch(
       UUID jobId,
       List<DownloadableFile> downloadableFiles,
@@ -513,84 +588,66 @@ public class AppleMediaInterface implements AppleBaseInterface {
             downloadableFiles.stream()
                 .map(AppleMediaInterface::getDataId)
                 .collect(Collectors.toList()));
-    final List<PhotosProtocol.AuthorizeUploadResponse> successAuthorizeUploadResponseList =
-        new ArrayList<>();
-    for (PhotosProtocol.AuthorizeUploadResponse authorizeUploadResponse :
+    final List<ApplePreUpload> successAuthorizeUploadResponseList = new ArrayList<>();
+    for (AuthorizeUploadResponse authorizeUploadResponse :
         getUploadUrlsResponse.getUrlResponsesList()) {
       final String dataId = authorizeUploadResponse.getDataId();
       if (authorizeUploadResponse.hasStatus()
           && authorizeUploadResponse.getStatus().getCode() == SC_OK) {
-        successAuthorizeUploadResponseList.add(authorizeUploadResponse);
+        try {
+          successAuthorizeUploadResponseList.add(ApplePreUpload.of(authorizeUploadResponse));
+        } catch (IllegalStateException e) {
+          markDownloadableFileFailed(
+              "parse AuthorizeUploadResponse from Apple servers",
+              jobId,
+              checkNotNull(
+                  dataIdToDownloadableFiles.get(dataId),
+                  "somehow missing dataid=%s used in getUrlResponsesList",
+                  dataId),
+              idempotentImportExecutor,
+              ImmutableMap.of(),
+              e);
+        }
       } else {
-        // collect errors in get upload url
-        final DownloadableFile downloadableFile = dataIdToDownloadableFiles.get(dataId);
-        idempotentImportExecutor.executeAndSwallowIOExceptions(
-          downloadableFile.getIdempotentId(),
-          downloadableFile.getName(),
-          () -> {
-            throw new IOException(
-                    getApplePhotosImportThrowingMessage(
-                            "Fail to get upload url", ImmutableMap.of(
-                                    AuditKeys.errorCode, String.valueOf(authorizeUploadResponse.getStatus().getCode()),
-                                    AuditKeys.jobId, jobId.toString(),
-                                    AuditKeys.dataId, getDataId(downloadableFile),
-                                    AuditKeys.albumId, downloadableFile.getFolderId())));
-          });
+        markDownloadableFileFailed(
+            "produce new upload URLs on Apple servers",
+            jobId,
+            checkNotNull(
+                dataIdToDownloadableFiles.get(dataId),
+                "somehow missing dataid=%s used in getUrlResponsesList",
+                dataId),
+            idempotentImportExecutor,
+            ImmutableMap.of(
+                AuditKeys.errorCode, String.valueOf(authorizeUploadResponse.getStatus().getCode())),
+            null /*cause*/);
       }
     }
 
     // download then upload content
-    final Map<String, String> dataIdToUploadResponse =
-      uploadContent(
-        dataIdToDownloadableFiles.values().stream()
+    final Map<String, URL> dataIdToDownloadURLMap = dataIdToDownloadableFiles.values().stream()
           .collect(Collectors
             .toMap(
               AppleMediaInterface::getDataId,
-              DownloadableItem::getFetchableUrl)),
-        successAuthorizeUploadResponseList);
+              DownloadableItem::getFetchableURL));
+    // Map from dataId to AppleNewUpload, where dataId is soe file we successfully downloaded and
+    // uploaded to Apple.
+    final ImmutableMap<String, AppleNewUpload> uploadedFiles = uploadOrSkipAll(
+        jobId,
+        idempotentImportExecutor,
+        successAuthorizeUploadResponseList,
+        dataIdToDownloadableFiles,
+        dataIdToDownloadURLMap);
 
-    // collect errors in upload content
-    for (PhotosProtocol.AuthorizeUploadResponse authorizeUploadResponse :
-        successAuthorizeUploadResponseList) {
-      final String dataId = authorizeUploadResponse.getDataId();
-      if (!dataIdToUploadResponse.containsKey(dataId)) {
-        final DownloadableFile downloadableFile = dataIdToDownloadableFiles.get(dataId);
-        idempotentImportExecutor.executeAndSwallowIOExceptions(
-          downloadableFile.getIdempotentId(),
-          downloadableFile.getName(),
-          () -> {
-            throw new IOException(getApplePhotosImportThrowingMessage("Fail to upload content", ImmutableMap.of(
-                    AuditKeys.jobId, jobId.toString(),
-                    AuditKeys.dataId, getDataId(downloadableFile),
-                    AuditKeys.albumId, downloadableFile.getFolderId()
-            )));
-          });
-      }
-    }
+    // prep for request: build a NewMediaRequest protobuf
+    final List<PhotosProtocol.NewMediaRequest> newMediaRequestList =
+        uploadedFiles.values().stream()
+        .map(AppleNewUpload::toNewMediaRequest)
+        .collect(Collectors.toList());
 
-    // generate newMediaRequest
-    final List<PhotosProtocol.NewMediaRequest> newMediaRequestList = new ArrayList<>();
-    for (String dataId : dataIdToUploadResponse.keySet()) {
-      final DownloadableFile downloadableFile = dataIdToDownloadableFiles.get(dataId);
-      final String singleFileUploadResponse =
-          dataIdToUploadResponse.get(dataId);
-      String filename = downloadableFile.getName();
-      String description = getDescription(downloadableFile);
-      String mediaType = downloadableFile.getMimeType();
-      String albumId = downloadableFile.getFolderId();
-      Long creationDateInMillis = getUploadedTime(downloadableFile);
-      newMediaRequestList.add(
-        AppleMediaInterface.createNewMediaRequest(
-          dataId,
-          filename,
-          description,
-          albumId,
-          mediaType,
-          null,
-          creationDateInMillis,
-          singleFileUploadResponse));
-    }
-
+    // TODO the max-upload size (ApplePhotosConstants.contentRequestLength enforced by uploadContent
+    // method used above) seems to be purely for this singular payload? If so, we can change this
+    // line so that the createMedia call happens in chunks split by that max, so we can upload more
+    // content, right?
     final PhotosProtocol.CreateMediaResponse createMediaResponse =
         createMedia(jobId.toString(), dataClass, newMediaRequestList);
 
@@ -600,7 +657,10 @@ public class AppleMediaInterface implements AppleBaseInterface {
     for (PhotosProtocol.NewMediaResponse newMediaResponse :
         createMediaResponse.getNewMediaResponsesList()) {
       final String dataId = newMediaResponse.getDataId();
-      final DownloadableFile downloadableFile = dataIdToDownloadableFiles.get(dataId);
+      final DownloadableFile downloadableFile = checkNotNull(
+          uploadedFiles.get(dataId),
+          "somehow missing upload metadata for dataid=%s, yet just made request based on it",
+          dataId).downloadableFile();
       if (newMediaResponse.hasStatus()
           && newMediaResponse.getStatus().getCode() == SC_OK) {
         mediaCount += 1;
@@ -631,18 +691,13 @@ public class AppleMediaInterface implements AppleBaseInterface {
             return newMediaResponse.getRecordId();
           });
       } else {
-        idempotentImportExecutor.executeAndSwallowIOExceptions(
-          downloadableFile.getIdempotentId(),
-          downloadableFile.getName(),
-          () -> {
-            throw new IOException(
-                    getApplePhotosImportThrowingMessage(
-                "Fail to create media", ImmutableMap.of(
-                            AuditKeys.errorCode, String.valueOf(newMediaResponse.getStatus().getCode()),
-                            AuditKeys.jobId, jobId.toString(),
-                            AuditKeys.dataId, getDataId(downloadableFile),
-                            AuditKeys.albumId, downloadableFile.getFolderId())));
-          });
+          markDownloadableFileFailed(
+              "complete via CreateMedia API on Apple server",
+              jobId,
+              downloadableFile,
+              idempotentImportExecutor,
+              ImmutableMap.of(AuditKeys.errorCode, String.valueOf(newMediaResponse.getStatus().getCode())),
+              null /*cause*/);
       }
     }
 
@@ -661,6 +716,8 @@ public class AppleMediaInterface implements AppleBaseInterface {
     return batchImportResults;
   }
 
+  // TODO is this a bug? why not rely on getIdempotentId? PhotoModel implements that and it's high
+  // specificity than getDataId is.
   private static String getDataId(DownloadableFile downloadableFile) {
     if (downloadableFile instanceof PhotoModel) {
       return ((PhotoModel) downloadableFile).getDataId();
@@ -668,24 +725,8 @@ public class AppleMediaInterface implements AppleBaseInterface {
     return downloadableFile.getIdempotentId();
   }
 
-  private static Long getUploadedTime(DownloadableFile downloadableFile) {
-    Date updatedTime = null;
-    if (downloadableFile instanceof PhotoModel) {
-      updatedTime = ((PhotoModel) downloadableFile).getUploadedTime();
-    } else if (downloadableFile instanceof VideoModel) {
-      updatedTime = ((VideoModel) downloadableFile).getUploadedTime();
-    }
-    return updatedTime == null ? null : updatedTime.getTime();
-  }
-
-  private static String getDescription(DownloadableFile downloadableFile) {
-    if (downloadableFile instanceof PhotoModel) {
-      return ((PhotoModel) downloadableFile).getDescription();
-    }
-    if (downloadableFile instanceof VideoModel) {
-      return ((VideoModel) downloadableFile).getDescription();
-    }
-    return null;
+  private static Throwable badConnectionToAppleError(HttpURLConnection con, String detailMessage, Throwable e) {
+    return new HttpException(con, getApplePhotosImportThrowingMessage(detailMessage), e);
   }
 
   public static String getApplePhotosImportThrowingMessage(final String cause) {
@@ -698,5 +739,33 @@ public class AppleMediaInterface implements AppleBaseInterface {
       finalLogMessage = String.format("%s, %s:%s", finalLogMessage, key.name(), keyValuePairs.get(key));
     }
     return finalLogMessage;
+  }
+
+  private static void markDownloadableFileFailed(
+      String failingAction,
+      UUID jobId,
+      DownloadableFile downloadableFile,
+      IdempotentImportExecutor idempotentImportExecutor,
+      ImmutableMap<AuditKeys, String> extraAuditKeys,
+      Throwable cause) throws Exception {
+    ImmutableMap<AuditKeys, String> defaultAuditKeys = ImmutableMap.of(
+                                  AuditKeys.jobId, jobId.toString(),
+                                  AuditKeys.dataId, getDataId(downloadableFile),
+                                  AuditKeys.albumId, downloadableFile.getFolderId());
+    ImmutableMap<AuditKeys, String> auditKeys = ImmutableMap.<AuditKeys, String>builder()
+        .putAll(defaultAuditKeys)
+        .putAll(extraAuditKeys)
+        .buildOrThrow();
+    String exceptionErrorMessage = getApplePhotosImportThrowingMessage(
+        "failed trying to " + failingAction,
+        auditKeys);
+    IOException ioException = cause == null ? new IOException(exceptionErrorMessage) : new IOException(exceptionErrorMessage, cause);
+
+    idempotentImportExecutor.executeAndSwallowIOExceptions(
+        downloadableFile.getIdempotentId(),
+        downloadableFile.getName(),
+        () -> {
+          throw ioException;
+        });
   }
 }

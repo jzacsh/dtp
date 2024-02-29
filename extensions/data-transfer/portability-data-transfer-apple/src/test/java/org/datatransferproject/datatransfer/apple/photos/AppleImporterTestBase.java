@@ -21,6 +21,9 @@ import static org.apache.http.HttpStatus.SC_INTERNAL_SERVER_ERROR;
 import static org.apache.http.HttpStatus.SC_OK;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.anyList;
+import static org.mockito.Mockito.anyMap;
+import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -46,7 +49,6 @@ import org.datatransferproject.types.transfer.auth.AppCredentials;
 import org.datatransferproject.types.transfer.auth.TokensAndUrlAuthData;
 import org.datatransferproject.types.transfer.errors.ErrorDetail;
 import org.jetbrains.annotations.NotNull;
-import org.junit.Assert;
 import org.junit.platform.commons.util.ReflectionUtils;
 import org.junit.platform.commons.util.ReflectionUtils.HierarchyTraversalMode;
 import org.mockito.stubbing.Answer;
@@ -81,7 +83,7 @@ public class AppleImporterTestBase {
     mediaInterface = setupMediaInterface();
     factory = mock(AppleInterfaceFactory.class);
     when(factory.getOrCreateMediaInterface(any(), any(), any(), anyString(), any()))
-      .thenReturn(mediaInterface);
+        .thenReturn(mediaInterface);
   }
 
   private AppleMediaInterface setupMediaInterface() throws Exception {
@@ -92,21 +94,23 @@ public class AppleImporterTestBase {
     fieldsToInject.put("exportingService", EXPORTING_SERVICE);
     fieldsToInject.put("monitor", monitor);
 
-    fieldsToInject.entrySet()
-      .forEach(entry -> {
-        try {
-          ReflectionUtils.findFields(
-              AppleMediaInterface.class,
-              f -> f.getName().equals(entry.getKey()),
-              HierarchyTraversalMode.TOP_DOWN)
-            .stream()
-            .findFirst()
-            .get()
-            .set(mediaInterface, entry.getValue());
-        } catch (IllegalAccessException e) {
-          throw new RuntimeException(e);
-        }
-      });
+    fieldsToInject
+        .entrySet()
+        .forEach(
+            entry -> {
+              try {
+                ReflectionUtils.findFields(
+                        AppleMediaInterface.class,
+                        f -> f.getName().equals(entry.getKey()),
+                        HierarchyTraversalMode.TOP_DOWN)
+                    .stream()
+                    .findFirst()
+                    .get()
+                    .set(mediaInterface, entry.getValue());
+              } catch (IllegalAccessException e) {
+                throw new RuntimeException(e);
+              }
+            });
 
     when(mediaInterface.importAlbums(any(), any(), any(), any())).thenCallRealMethod();
     when(mediaInterface.importAllMedia(any(), any(), any(), any())).thenCallRealMethod();
@@ -138,6 +142,36 @@ public class AppleImporterTestBase {
                   return PhotosProtocol.GetUploadUrlsResponse.newBuilder()
                       .addAllUrlResponses(authorizeUploadResponseList)
                       .build();
+                });
+  }
+
+  protected void setUpUploadOrSkipAll(@NotNull final Map<String, Integer> datatIdToStatus)
+      throws IOException, CopyExceptionWithFailureReason {
+    when(mediaInterface.uploadOrSkipAll(
+            any(UUID.class), any(IdempotentImportExecutor.class), anyList(), anyMap(), anyMap()))
+        .thenAnswer(
+            (Answer<Map<String, AppleNewUpload>>)
+                invocation -> {
+                  Object[] args = invocation.getArguments();
+                  final List<PhotosProtocol.AuthorizeUploadResponse> authorizeUploadResponseList =
+                      (List<PhotosProtocol.AuthorizeUploadResponse>) args[1];
+                  final Map<String, String> dataIdToSingleFileUploadResponseMap =
+                      authorizeUploadResponseList.stream()
+                          .filter(
+                              authorizeUploadResponse ->
+                                  datatIdToStatus.get(authorizeUploadResponse.getDataId()) == SC_OK)
+                          .map(
+                              authorizeUploadResponse ->
+                                  AppleNewUpload.builder()
+                                      .setDownloadableFile(downloadableFile)
+                                      .setOriginatingDtpDataId(authorizeUploadResponse.getDataId())
+                                      .setNewlyStartedAppleDataId(singleFileUploadResponse)
+                                      .build())
+                          .collect(
+                              Collectors.toMap(
+                                  PhotosProtocol.AuthorizeUploadResponse::getDataId,
+                                  authorizeUploadResponse -> "SingleUploadContentResponse"));
+                  return dataIdToSingleFileUploadResponseMap;
                 });
   }
 
@@ -242,7 +276,10 @@ public class AppleImporterTestBase {
       @NotNull final ErrorDetail expected, @NotNull final ErrorDetail actual) {
     assertThat(actual.id()).isEqualTo(expected.id());
     assertThat(actual.title()).isEqualTo(expected.title());
-    assertThat(actual.exception()).contains(expected.exception()); // the error message is a long stack trace, we just want to make sure
+    assertThat(actual.exception())
+        .contains(
+            expected
+                .exception()); // the error message is a long stack trace, we just want to make sure
     // we have the right error code and error message
   }
 
@@ -268,8 +305,8 @@ public class AppleImporterTestBase {
               PHOTOS_DATAID_BASE + i,
               ALBUM_DATAID_BASE + i,
               false,
-                  null,
-                  new Date());
+              null,
+              new Date());
       photos.add(photoModel);
     }
     return photos;
@@ -287,7 +324,7 @@ public class AppleImporterTestBase {
               VIDEOS_DATAID_BASE + i,
               ALBUM_DATAID_BASE + i,
               false,
-                  new Date());
+              new Date());
       videos.add(videoModel);
     }
     return videos;

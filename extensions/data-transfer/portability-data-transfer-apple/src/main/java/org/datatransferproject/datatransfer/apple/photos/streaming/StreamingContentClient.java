@@ -19,25 +19,35 @@ package org.datatransferproject.datatransfer.apple.photos.streaming;
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Arrays;
 import org.apache.commons.io.IOUtils;
 import org.apache.http.HttpHeaders;
+import java.net.ProtocolException;
 import org.apache.http.HttpStatus;
 import org.datatransferproject.api.launcher.Monitor;
 import org.datatransferproject.datatransfer.apple.constants.AppleConstants;
 import org.datatransferproject.datatransfer.apple.constants.ApplePhotosConstants;
 import org.datatransferproject.datatransfer.apple.constants.Headers;
-import org.datatransferproject.datatransfer.apple.exceptions.AppleContentException;
+import org.datatransferproject.datatransfer.apple.exceptions.HttpException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.Closeable;
+
 /**
  * An Http Client to handle uploading and downloading of the streaming content.
+ *
+ * <p>Warning: like any closeable ensure callsites cleanup (eg: use try-with-resources statements).
  */
-public class StreamingContentClient {
+// TODO switch internals to something a bit less low-level than HttpUrlConnection+IOUtils, like say
+// org.apache.http.client offerings. See
+// https://hc.apache.org/httpcomponents-client-5.3.x/quickstart.html for how.
+public class StreamingContentClient implements Closeable {
   private HttpURLConnection connection;
   private DataOutputStream outputStream;
 
@@ -49,29 +59,53 @@ public class StreamingContentClient {
   };
 
   /**
-   * Creates a streaming session with the specified url
+   * Creates a streaming session with the specified URL.
    *
    * @param url the url to upload or download from
    * @param mode indicates if this is an upload or a download session
    * @throws IOException
    */
   public StreamingContentClient(
-      @NotNull final String url, @NotNull final StreamingMode mode, @NotNull Monitor monitor)
-      throws IOException {
+      @NotNull final URL url, @NotNull final StreamingMode mode, @NotNull Monitor monitor)
+      throws HttpException {
     this.monitor = monitor;
-    URL urlObject = new URL(url);
-    connection = (HttpURLConnection) urlObject.openConnection();
+    try {
+      connection = (HttpURLConnection) url.openConnection();
+    } catch (IOException e) {
+      throw new HttpException(connection, String.format("[mode=%s] failed opening connection to server", mode), e);
+    }
+
     connection.setRequestProperty("Transfer-Encoding", "chunked");
     connection.setRequestProperty("content-type", "application/octet-stream");
     connection.setDoOutput(true);
     if (mode.equals(StreamingMode.UPLOAD)) {
       connection.setDoInput(true);
       connection.setChunkedStreamingMode(ApplePhotosConstants.contentRequestLength);
-      connection.setRequestMethod("POST");
+      setValidHttpMethod(connection, ValidHttpMethod.POST);
       connection.setRequestProperty(Headers.OPERATION_GROUP.getValue(), AppleConstants.DTP_IMPORT_OPERATION_GROUP);
-      outputStream = new DataOutputStream(connection.getOutputStream());
+
+      OutputStream connectionOutputStream;
+      try {
+        connectionOutputStream = connection.getOutputStream();
+      } catch (IOException e) {
+        throw new HttpException(connection, String.format("[mode=%s] failed creating output stream to write to server", mode), e);
+      }
+      outputStream = new DataOutputStream(connectionOutputStream);
     } else {
-      connection.setRequestMethod("GET");
+      setValidHttpMethod(connection, ValidHttpMethod.GET);
+    }
+  }
+
+  private enum ValidHttpMethod {
+    GET,
+    POST
+  }
+
+  private static void setValidHttpMethod(HttpURLConnection connection, ValidHttpMethod method) throws IllegalStateException {
+    try {
+      connection.setRequestMethod(method.name());
+    } catch (ProtocolException e) {
+      throw new IllegalStateException(String.format("failed setting %s as HTTP method", method.name()), e);
     }
   }
 
@@ -81,41 +115,40 @@ public class StreamingContentClient {
    *
    * @param uploadBytes
    * @return ContentResponse
-   * @throws AppleContentException
+   * @throws HttpException
    */
   @Nullable
-  public void uploadBytes(@NotNull final byte[] uploadBytes) throws AppleContentException {
+  public void uploadBytes(@NotNull final byte[] uploadBytes) throws HttpException {
     try {
       outputStream.write(uploadBytes);
     } catch (IOException e) {
       monitor.severe(() -> "Error when uploading to content", e);
-      connection.disconnect();
-      throw new AppleContentException("Error when uploading to Content", e);
+      throw new HttpException(connection, "uploading content to Apple", e);
     }
   }
 
+  @Override
+  public void close() {
+    connection.disconnect();
+  }
+
   @Nullable
-  public String completeUpload() throws AppleContentException {
+  public String completeUpload() throws HttpException {
     try {
-      try {
-        StringBuilder content;
-        try (BufferedReader br =
-            new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
-          String line;
-          content = new StringBuilder();
-          while ((line = br.readLine()) != null) {
-            content.append(line);
-            content.append(System.lineSeparator());
-          }
+      StringBuilder content;
+      try (BufferedReader br =
+          new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+        String line;
+        content = new StringBuilder();
+        while ((line = br.readLine()) != null) {
+          content.append(line);
+          content.append(System.lineSeparator());
         }
-        return content.toString();
-      } finally {
-        connection.disconnect();
       }
+      return content.toString();
     } catch (IOException e) {
       monitor.severe(() -> "Error when completing upload", e);
-      connection.disconnect();
-      throw new AppleContentException("Error when uploading to Content", e);
+      throw new HttpException(connection, "completing content-upload to Apple", e);
     }
   }
 
@@ -126,17 +159,20 @@ public class StreamingContentClient {
    *
    * @param maxBytesToRead
    * @return bytes read from url (or null if none can be read)
-   * @throws AppleContentException
+   * @throws HttpException
    */
   @Nullable
-  public byte[] downloadBytes(final int maxBytesToRead) throws AppleContentException {
+  public byte[] downloadBytes(final int maxBytesToRead) throws HttpException {
     final byte[] buffer = new byte[maxBytesToRead];
 
-    try {
-      int bytesRead = IOUtils.read(connection.getInputStream(), buffer);
-      // re-try if a 301 is received, otherwise throw an exception
+    try (InputStream connInputStream = connection.getInputStream()) {
+      int bytesRead = IOUtils.read(connInputStream, buffer);
+      // retry if a redirect is received, otherwise throw an exception
+      // TODO we can probably delete this branch since HttpUrlConnection#setFollowRedirects is
+      // enabled by default.
       if (connection.getResponseCode() != HttpStatus.SC_OK) {
-        if (connection.getResponseCode() == HttpStatus.SC_MOVED_PERMANENTLY) {
+        if (connection.getResponseCode() == HttpStatus.SC_MOVED_PERMANENTLY ||
+            connection.getResponseCode() == HttpStatus.SC_MOVED_TEMPORARILY) {
           final String newUrl = connection.getHeaderField(HttpHeaders.LOCATION);
           URL urlObject = new URL(newUrl);
           connection = (HttpURLConnection) urlObject.openConnection();
@@ -145,21 +181,21 @@ public class StreamingContentClient {
           connection.setDoOutput(true);
           connection.setRequestMethod("GET");
 
-          bytesRead = IOUtils.read(connection.getInputStream(), buffer);
 
-          if (connection.getResponseCode() != HttpStatus.SC_OK) {
-            throw new IOException(
-                "Error response code when trying to download content "
-                    + connection.getResponseCode());
+          try (InputStream redirectedConnInputStream = connection.getInputStream()) {
+            bytesRead = IOUtils.read(redirectedConnInputStream, buffer);
+
+            if (connection.getResponseCode() != HttpStatus.SC_OK) {
+              throw new HttpException(
+                  connection, "downloading redirected transfer content: non-200 HTTP response code");
+            }
           }
         } else {
-          throw new IOException(
-              "Error response code when trying to download content "
-                  + connection.getResponseCode());
+          throw new HttpException(
+              connection, "downloading transfer content: non-200 HTTP response code");
         }
       }
       if (bytesRead < maxBytesToRead) {
-        connection.disconnect();
         if (bytesRead <= 0) {
           return null;
         } else {
@@ -169,9 +205,8 @@ public class StreamingContentClient {
       }
       return buffer;
     } catch (IOException e) {
-      monitor.severe(() -> "Error when downloading from Content", e);
-      connection.disconnect();
-      throw new AppleContentException("Error when downloading from Content", e);
+      monitor.severe(() -> "Error when downloading content", e);
+      throw new HttpException(connection, "downloading content", e);
     }
   }
 }

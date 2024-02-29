@@ -18,16 +18,36 @@ package org.datatransferproject.datatransfer.apple.exceptions;
 
 import org.jetbrains.annotations.NotNull;
 
-/**
- * An exception to be used when the content uploading / downloading fails.
- */
+/** An exception to be used when the content uploading / downloading fails. */
 public class AppleContentException extends Exception {
+  public enum ImmediateCause {
+    TOO_MUCH_DATA,
+    SERVER_ERROR_REPLY,
+    UNKNOWN_CAUSE
+  }
+
+  private ImmediateCause immediateCause = ImmediateCause.UNKNOWN_CAUSE;
+
+  public ImmediateCause getImmediateCause() {
+    return this.immediateCause;
+  }
 
   public AppleContentException(@NotNull final String message) {
     super(message);
   }
 
+  public AppleContentException(@NotNull final String message, ImmediateCause immediateCause) {
+    this(message);
+    this.immediateCause = immediateCause;
+  }
+
   public AppleContentException(@NotNull final String message, @NotNull Throwable throwable) {
     super(message, throwable);
+  }
+
+  public AppleContentException(
+      @NotNull final String message, @NotNull Throwable throwable, ImmediateCause immediateCause) {
+    this(message, throwable);
+    this.immediateCause = immediateCause;
   }
 }

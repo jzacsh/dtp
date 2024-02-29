@@ -21,7 +21,6 @@ import static org.apache.http.HttpStatus.SC_OK;
 import static org.datatransferproject.types.common.models.photos.PhotosContainerResource.ALBUMS_COUNT_DATA_NAME;
 import static org.datatransferproject.types.common.models.photos.PhotosContainerResource.PHOTOS_COUNT_DATA_NAME;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyByte;
 import static org.mockito.Mockito.anyCollection;
 import static org.mockito.Mockito.anyList;
 import static org.mockito.Mockito.anyMap;
@@ -30,7 +29,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -45,7 +43,6 @@ import org.datatransferproject.datatransfer.apple.photos.photosproto.PhotosProto
 import org.datatransferproject.datatransfer.apple.photos.photosproto.PhotosProtocol.Status;
 import org.datatransferproject.spi.transfer.provider.ImportResult;
 import org.datatransferproject.spi.transfer.types.CopyExceptionWithFailureReason;
-import org.datatransferproject.transfer.JobMetadata;
 import org.datatransferproject.types.common.models.DataVertical;
 import org.datatransferproject.types.common.models.media.MediaAlbum;
 import org.datatransferproject.types.common.models.photos.PhotoAlbum;
@@ -65,8 +62,8 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
   public void setup() throws Exception {
     super.setup();
     applePhotosImporter =
-      new ApplePhotosImporter(
-        new AppCredentials("key", "secret"), EXPORTING_SERVICE, monitor, factory);
+        new ApplePhotosImporter(
+            new AppCredentials("key", "secret"), EXPORTING_SERVICE, monitor, factory);
   }
 
   @Test
@@ -75,9 +72,7 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
     final int albumCount = 1;
     final List<PhotoAlbum> photoAlbums = createTestAlbums(albumCount);
     setUpCreateAlbumsResponse(
-        photoAlbums.stream()
-            .collect(
-                Collectors.toMap(PhotoAlbum::getId, photoAlbum -> SC_OK)));
+        photoAlbums.stream().collect(Collectors.toMap(PhotoAlbum::getId, photoAlbum -> SC_OK)));
 
     // run test
     PhotosContainerResource data = new PhotosContainerResource(photoAlbums, null);
@@ -109,56 +104,56 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
     // set up
     when(mediaInterface.createAlbums(any(), any(), any())).thenCallRealMethod();
     when(mediaInterface.makePhotosServicePostRequest(any(), any()))
-            .thenAnswer(
-                    (Answer<byte[]>)
-                            invocation -> {
-                              Object[] args = invocation.getArguments();
-                              final byte[] payload = (byte[]) args[1];
-                              final PhotosProtocol.CreateAlbumsRequest createAlbumsRequest = PhotosProtocol.CreateAlbumsRequest.parseFrom(payload);
-                              final List<NewPhotoAlbumResponse> newPhotoAlbumResponseList =
-                                      createAlbumsRequest.getNewPhotoAlbumRequestsList().stream()
-                                              .map(
-                                                      newPhotoAlbumRequest ->
-                                                              NewPhotoAlbumResponse.newBuilder()
-                                                                      .setRecordId(
-                                                                              ALBUM_RECORDID_BASE + newPhotoAlbumRequest.getDataId())
-                                                                      .setDataId(newPhotoAlbumRequest.getDataId())
-                                                                      .setName(newPhotoAlbumRequest.getName())
-                                                                      .setStatus(
-                                                                              Status.newBuilder()
-                                                                                      .setCode(SC_OK)
-                                                                                      .build())
-                                                                      .build())
-                                              .collect(Collectors.toList());
-                              return CreateAlbumsResponse.newBuilder()
-                                      .addAllNewPhotoAlbumResponses(newPhotoAlbumResponseList)
-                                      .build().toByteArray();
-                            });
+        .thenAnswer(
+            (Answer<byte[]>)
+                invocation -> {
+                  Object[] args = invocation.getArguments();
+                  final byte[] payload = (byte[]) args[1];
+                  final PhotosProtocol.CreateAlbumsRequest createAlbumsRequest =
+                      PhotosProtocol.CreateAlbumsRequest.parseFrom(payload);
+                  final List<NewPhotoAlbumResponse> newPhotoAlbumResponseList =
+                      createAlbumsRequest.getNewPhotoAlbumRequestsList().stream()
+                          .map(
+                              newPhotoAlbumRequest ->
+                                  NewPhotoAlbumResponse.newBuilder()
+                                      .setRecordId(
+                                          ALBUM_RECORDID_BASE + newPhotoAlbumRequest.getDataId())
+                                      .setDataId(newPhotoAlbumRequest.getDataId())
+                                      .setName(newPhotoAlbumRequest.getName())
+                                      .setStatus(Status.newBuilder().setCode(SC_OK).build())
+                                      .build())
+                          .collect(Collectors.toList());
+                  return CreateAlbumsResponse.newBuilder()
+                      .addAllNewPhotoAlbumResponses(newPhotoAlbumResponseList)
+                      .build()
+                      .toByteArray();
+                });
     final int albumCount = 1;
-    final List<PhotoAlbum> photoAlbums = List.of(new PhotoAlbum(ALBUM_DATAID_BASE, null, ALBUM_DESCRIPTION_BASE));
+    final List<PhotoAlbum> photoAlbums =
+        List.of(new PhotoAlbum(ALBUM_DATAID_BASE, null, ALBUM_DESCRIPTION_BASE));
 
     // run test
     PhotosContainerResource data = new PhotosContainerResource(photoAlbums, null);
     final ImportResult importResult =
-            applePhotosImporter.importItem(uuid, executor, authData, data);
+        applePhotosImporter.importItem(uuid, executor, authData, data);
 
     // verify correct methods were called
     verify(mediaInterface)
-            .createAlbums(
-                    uuid.toString(),
-                    DataVertical.PHOTOS.getDataType(),
-                    data.getAlbums().stream()
-                            .map(MediaAlbum::photoToMediaAlbum)
-                            .collect(Collectors.toList()));
+        .createAlbums(
+            uuid.toString(),
+            DataVertical.PHOTOS.getDataType(),
+            data.getAlbums().stream()
+                .map(MediaAlbum::photoToMediaAlbum)
+                .collect(Collectors.toList()));
 
     // check the result
     assertThat(importResult.getCounts().isPresent()).isTrue();
     assertThat(importResult.getCounts().get().get(ALBUMS_COUNT_DATA_NAME) == albumCount).isTrue();
     final Map<String, Serializable> expectedKnownValue =
-            photoAlbums.stream()
-                    .collect(
-                            Collectors.toMap(
-                                    PhotoAlbum::getId, photoAlbum -> ALBUM_RECORDID_BASE + photoAlbum.getId()));
+        photoAlbums.stream()
+            .collect(
+                Collectors.toMap(
+                    PhotoAlbum::getId, photoAlbum -> ALBUM_RECORDID_BASE + photoAlbum.getId()));
     checkKnownValues(expectedKnownValue);
   }
 
@@ -168,10 +163,7 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
     final int albumCount = ApplePhotosConstants.maxNewAlbumRequests + 1;
     final List<PhotoAlbum> photoAlbums = createTestAlbums(albumCount);
     setUpCreateAlbumsResponse(
-        photoAlbums.stream()
-            .collect(
-                Collectors.toMap(
-                    PhotoAlbum::getId, photoAlbum -> SC_OK)));
+        photoAlbums.stream().collect(Collectors.toMap(PhotoAlbum::getId, photoAlbum -> SC_OK)));
 
     // run test
     PhotosContainerResource data = new PhotosContainerResource(photoAlbums, null);
@@ -244,12 +236,11 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
     // check the result
     assertThat(importResult.getCounts().isPresent()).isTrue();
     assertThat(
-        importResult.getCounts().get().get(ALBUMS_COUNT_DATA_NAME) == albumCount - errorCount).isTrue();
+            importResult.getCounts().get().get(ALBUMS_COUNT_DATA_NAME) == albumCount - errorCount)
+        .isTrue();
     final Map<String, Serializable> expectedKnownValue =
         photoAlbums.stream()
-            .filter(
-                photoAlbum ->
-                    datatIdToStatus.get(photoAlbum.getId()) == SC_OK)
+            .filter(photoAlbum -> datatIdToStatus.get(photoAlbum.getId()) == SC_OK)
             .collect(
                 Collectors.toMap(
                     PhotoAlbum::getId, photoAlbum -> ALBUM_RECORDID_BASE + photoAlbum.getId()));
@@ -280,11 +271,7 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
     final int photoCount = 1;
     final List<PhotoModel> photos = createTestPhotos(photoCount);
     final Map<String, Integer> dataIdToStatus =
-        photos.stream()
-            .collect(
-                Collectors.toMap(
-                    PhotoModel::getDataId,
-                    photoModel -> SC_OK));
+        photos.stream().collect(Collectors.toMap(PhotoModel::getDataId, photoModel -> SC_OK));
     setUpGetUploadUrlResponse(dataIdToStatus);
     setUpUploadContentResponse(dataIdToStatus);
     setUpCreateMediaResponse(dataIdToStatus);
@@ -298,9 +285,10 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
     final List<String> dataIds =
         photos.stream().map(PhotoModel::getDataId).collect(Collectors.toList());
     verify(mediaInterface)
-        .getUploadUrl(
-            uuid.toString(), DataVertical.PHOTOS.getDataType(), dataIds);
-    verify(mediaInterface).uploadContent(anyMap(), anyList());
+        .getUploadUrl(uuid.toString(), DataVertical.PHOTOS.getDataType(), dataIds);
+    verify(mediaInterface)
+        .uploadOrSkipAll(
+            any(UUID.class), any(IdempotentImportExecutor.class), anyList(), anyMap(), anyMap());
     verify(mediaInterface).createMedia(anyString(), anyString(), anyList());
 
     // check the result
@@ -324,11 +312,7 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
     final int photoCount = ApplePhotosConstants.maxNewMediaRequests + 1;
     final List<PhotoModel> photos = createTestPhotos(photoCount);
     final Map<String, Integer> dataIdToStatus =
-        photos.stream()
-            .collect(
-                Collectors.toMap(
-                    PhotoModel::getDataId,
-                    photoModel -> SC_OK));
+        photos.stream().collect(Collectors.toMap(PhotoModel::getDataId, photoModel -> SC_OK));
     setUpGetUploadUrlResponse(dataIdToStatus);
     setUpUploadContentResponse(dataIdToStatus);
     setUpCreateMediaResponse(dataIdToStatus);
@@ -430,18 +414,9 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
 
     final Map<String, Serializable> expectedKnownValue =
         photos.stream()
-            .filter(
-                photoModel ->
-                    datatIdToGetUploadURLStatus.get(photoModel.getDataId())
-                        == SC_OK)
-            .filter(
-                photoModel ->
-                    datatIdToUploadContentStatus.get(photoModel.getDataId())
-                        == SC_OK)
-            .filter(
-                photoModel ->
-                    datatIdToCreateMediaStatus.get(photoModel.getDataId())
-                        == SC_OK)
+            .filter(photoModel -> datatIdToGetUploadURLStatus.get(photoModel.getDataId()) == SC_OK)
+            .filter(photoModel -> datatIdToUploadContentStatus.get(photoModel.getDataId()) == SC_OK)
+            .filter(photoModel -> datatIdToCreateMediaStatus.get(photoModel.getDataId()) == SC_OK)
             .collect(
                 Collectors.toMap(
                     photoModel -> photoModel.getAlbumId() + "-" + photoModel.getDataId(),
@@ -467,16 +442,17 @@ public class ApplePhotosImporterTest extends AppleImporterTestBase {
         errorDetailBuilder.setException(
             String.format(
                 "java.io.IOException: %s Fail to get upload url, errorCode:%d",
-                ApplePhotosConstants.APPLE_PHOTOS_IMPORT_ERROR_PREFIX,
-                SC_INTERNAL_SERVER_ERROR));
+                ApplePhotosConstants.APPLE_PHOTOS_IMPORT_ERROR_PREFIX, SC_INTERNAL_SERVER_ERROR));
       } else if (i < errorCountGetUploadURL + errorCountGetUploadURL) {
-        errorDetailBuilder.setException(String.format("java.io.IOException: %s Fail to upload content", ApplePhotosConstants.APPLE_PHOTOS_IMPORT_ERROR_PREFIX));
+        errorDetailBuilder.setException(
+            String.format(
+                "java.io.IOException: %s Fail to upload content",
+                ApplePhotosConstants.APPLE_PHOTOS_IMPORT_ERROR_PREFIX));
       } else {
         errorDetailBuilder.setException(
             String.format(
                 "java.io.IOException: %s Fail to create media, errorCode:%d",
-                ApplePhotosConstants.APPLE_PHOTOS_IMPORT_ERROR_PREFIX,
-                SC_INTERNAL_SERVER_ERROR));
+                ApplePhotosConstants.APPLE_PHOTOS_IMPORT_ERROR_PREFIX, SC_INTERNAL_SERVER_ERROR));
       }
       expectedErrors.add(errorDetailBuilder.build());
     }
