@@ -40,6 +40,7 @@ import org.datatransferproject.spi.transfer.security.AuthDataDecryptService;
 import org.datatransferproject.spi.transfer.types.CopyException;
 import org.datatransferproject.spi.transfer.types.CopyExceptionWithFailureReason;
 import org.datatransferproject.spi.transfer.types.FailureReasons;
+import org.datatransferproject.spi.transfer.types.signals.JobLifecycleEnd;
 import org.datatransferproject.spi.transfer.types.signals.JobLifecycleUpdate;
 import org.datatransferproject.transfer.Annotations.ExportSignalHandler;
 import org.datatransferproject.transfer.Annotations.ImportSignalHandler;
@@ -140,7 +141,7 @@ class JobProcessor {
           JobMetadata.getExportService(),
           JobMetadata.getImportService());
       JobMetadata.getStopWatch().start();
-      sendSignals(jobId, exportAuthData, importAuthData, JobLifecycleUpdate.JOB_BEGIN, monitor);
+      sendSignals(jobId, exportAuthData, importAuthData, JobLifecycleUpdate.ofStart(), monitor);
       copier.copy(exportAuthData, importAuthData, jobId, exportInfo);
       success = true;
     } catch (CopyExceptionWithFailureReason e) {
@@ -176,8 +177,16 @@ class JobProcessor {
           EventCode.WORKER_JOB_FINISHED);
       addErrorsAndMarkJobFinished(jobId, success, loggedErrors);
       hooks.jobFinished(jobId, success);
+
+      // TODO(jzacsh, sundeep) incorporate FailureReason and then we can make `JobLifecycleUpdate
+      // finalStatus` below a bit more nuanfced (via ofPartial(failureReason)). To do that though,
+      // we have to fix CopyExceptionWithFailureReason#getFailureReason so it returns the
+      // underlying FailureReasons enum value and not a potentialy-PII-ridden string. Or just write
+      // a dumb translator (like the .contains() swath of code above).
       JobLifecycleUpdate finalStatus =
-          success ? JobLifecycleUpdate.JOB_COMPLETED : JobLifecycleUpdate.JOB_ERRORED;
+          success
+              ? JobLifecycleUpdate.ofEnd(JobLifecycleEnd.ofPerfect())
+              : JobLifecycleUpdate.ofEnd(JobLifecycleEnd.ofPartial());
       sendSignals(jobId, exportAuthData, importAuthData, finalStatus, monitor);
       dtpInternalMetricRecorder.finishedJob(
           JobMetadata.getDataType(),
