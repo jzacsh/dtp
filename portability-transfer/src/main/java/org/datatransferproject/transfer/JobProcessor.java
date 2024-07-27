@@ -209,6 +209,9 @@ class JobProcessor {
         SignalRequest.newBuilder()
             .withJobId(jobId.toString())
             .withDataType(JobMetadata.getDataType().getDataType())
+            // DO NOT MERGE: I didn'tt address this API surface's changing, but the point of
+            // my branch was just to illustrate a core design change to JobLifecycleUpdate, not
+            // the ripple out of that discussion. Happy to help follow the refactor though :)
             .withJobStatus(jobLifecycleUpdate.name())
             .withExportingService(JobMetadata.getExportService())
             .withImportingService(JobMetadata.getImportService())
