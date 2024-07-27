@@ -53,7 +53,7 @@ public abstract class JobLifecycleUpdate {
         .build();
   }
 
-  public static Builder builder() {
+  public static JobLifecycleUpdate.Builder builder() {
     // TODO: Fix so we don't need fully qualified name of Buider here. This is to get ./gradlew to
     // recognize the class name due to a conflict in package names for our generated code, but the
     // conflict doesn't cause any actual problems with building.
