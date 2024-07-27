@@ -6,7 +6,10 @@ import com.google.auto.value.AutoValue;
 @AutoValue
 public abstract class JobLifecycleEnd {
   static Builder builder() {
-    return AutoValue_JobLifecycleEnd.Builder();
+    // TODO: Fix so we don't need fully qualified name of Buider here. This is to get ./gradlew to
+    // recognize the class name due to a conflict in package names for our generated code, but the
+    // conflict doesn't cause any actual problems with building.
+    return org.datatransferproject.spi.transfer.types.signals.AutoValue_JobLifecycleEnd.Builder();
   }
 
   @AutoValue.Builder
