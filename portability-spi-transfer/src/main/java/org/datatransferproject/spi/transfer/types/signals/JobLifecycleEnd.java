@@ -15,7 +15,7 @@ public abstract class JobLifecycleEnd {
   @AutoValue.Builder
   public abstract static class Builder {
     abstract JobLifecycleEnd build();
-  }
 
-  /* DO NOT MERGE - fill out  from PR discussions */
+    /* DO NOT MERGE - fill out  from PR discussions */
+  }
 }

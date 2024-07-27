@@ -26,13 +26,17 @@ public abstract class JobLifecycleUpdate {
     JOB_ENDED /* DO NOT MERGE - renmae from JOB_COMPLETED */
   }
 
-  public static Builder builder() {
-    // TODO: Fix so we don't need fully qualified name of Buider here. This is to get ./gradlew to
-    // recognize the class name due to a conflict in package names for our generated code, but the
-    // conflict doesn't cause any actual problems with building.
-    return org.datatransferproject.spi.transfer.types.signals.AutoValue_JobLifecycleUpdate.Builder()
-        .setJobLifecycle(JobLifecycle.JOB_UNSPECIFIED);
-  }
+  /** Returns the particular state, within the broader lifecycle of a job, this job is in. */
+  public abstract JobLifecycle jobLifecycle();
+
+  /**
+   * Returns optional metadata about jobs in the end-state, if available.
+   *
+   * <p>When {@link JobLifecycle.JOB_ENDED}, then this might be present to add more metadata about
+   * the end-state of the job (eg: qualifications about the health of the job like number of failed
+   * files).
+   */
+  public abstract Optional<JobLifecycleEnd> jobLifecycleEnd();
 
   public static JobLifecycleUpdate ofStart() {
     return builder().setJobLifecycle(JobLifecycle.JOB_BEGIN).build();
@@ -49,17 +53,13 @@ public abstract class JobLifecycleUpdate {
         .build();
   }
 
-  /** Returns the particular state, within the broader lifecycle of a job, this job is in. */
-  public abstract JobLifecycle jobLifecycle();
-
-  /**
-   * Returns optional metadata about jobs in the end-state, if available.
-   *
-   * <p>When {@link JobLifecycle.JOB_ENDED}, then this might be present to add more metadata about
-   * the end-state of the job (eg: qualifications about the health of the job like number of failed
-   * files).
-   */
-  public abstract Optional<JobLifecycleEnd> jobLifecycleEnd();
+  public static Builder builder() {
+    // TODO: Fix so we don't need fully qualified name of Buider here. This is to get ./gradlew to
+    // recognize the class name due to a conflict in package names for our generated code, but the
+    // conflict doesn't cause any actual problems with building.
+    return org.datatransferproject.spi.transfer.types.signals.AutoValue_JobLifecycleUpdate.Builder()
+        .setJobLifecycle(JobLifecycle.JOB_UNSPECIFIED);
+  }
 
   @AutoValue.Builder
   public abstract static class Builder {
