@@ -21,7 +21,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Strings;
 import com.google.inject.Inject;
 import com.google.inject.Provider;
-
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Optional;
@@ -37,11 +36,11 @@ import org.datatransferproject.spi.cloud.types.PortabilityJob.State;
 import org.datatransferproject.spi.transfer.hooks.JobHooks;
 import org.datatransferproject.spi.transfer.provider.SignalHandler;
 import org.datatransferproject.spi.transfer.provider.SignalRequest;
-import org.datatransferproject.spi.transfer.types.signals.SignalType;
 import org.datatransferproject.spi.transfer.security.AuthDataDecryptService;
 import org.datatransferproject.spi.transfer.types.CopyException;
 import org.datatransferproject.spi.transfer.types.CopyExceptionWithFailureReason;
 import org.datatransferproject.spi.transfer.types.FailureReasons;
+import org.datatransferproject.spi.transfer.types.signals.JobLifecycleUpdate;
 import org.datatransferproject.transfer.Annotations.ExportSignalHandler;
 import org.datatransferproject.transfer.Annotations.ImportSignalHandler;
 import org.datatransferproject.transfer.copier.InMemoryDataCopier;
@@ -141,7 +140,7 @@ class JobProcessor {
           JobMetadata.getExportService(),
           JobMetadata.getImportService());
       JobMetadata.getStopWatch().start();
-      sendSignals(jobId, exportAuthData, importAuthData, SignalType.JOB_BEGIN, monitor);
+      sendSignals(jobId, exportAuthData, importAuthData, JobLifecycleUpdate.JOB_BEGIN, monitor);
       copier.copy(exportAuthData, importAuthData, jobId, exportInfo);
       success = true;
     } catch (CopyExceptionWithFailureReason e) {
@@ -177,7 +176,8 @@ class JobProcessor {
           EventCode.WORKER_JOB_FINISHED);
       addErrorsAndMarkJobFinished(jobId, success, loggedErrors);
       hooks.jobFinished(jobId, success);
-      SignalType finalStatus = success ? SignalType.JOB_COMPLETED : SignalType.JOB_ERRORED;
+      JobLifecycleUpdate finalStatus =
+          success ? JobLifecycleUpdate.JOB_COMPLETED : JobLifecycleUpdate.JOB_ERRORED;
       sendSignals(jobId, exportAuthData, importAuthData, finalStatus, monitor);
       dtpInternalMetricRecorder.finishedJob(
           JobMetadata.getDataType(),
@@ -190,14 +190,20 @@ class JobProcessor {
     }
   }
 
-  private void sendSignals(UUID jobId, AuthData exportAuthData, AuthData importAuthData, SignalType signalType, Monitor monitor) {
-    SignalRequest signalRequest = SignalRequest.newBuilder()
-      .withJobId(jobId.toString())
-      .withDataType(JobMetadata.getDataType().getDataType())
-      .withJobStatus(signalType.name())
-      .withExportingService(JobMetadata.getExportService())
-      .withImportingService(JobMetadata.getImportService())
-      .build();
+  private void sendSignals(
+      UUID jobId,
+      AuthData exportAuthData,
+      AuthData importAuthData,
+      JobLifecycleUpdate jobLifecycleUpdate,
+      Monitor monitor) {
+    SignalRequest signalRequest =
+        SignalRequest.newBuilder()
+            .withJobId(jobId.toString())
+            .withDataType(JobMetadata.getDataType().getDataType())
+            .withJobStatus(jobLifecycleUpdate.name())
+            .withExportingService(JobMetadata.getExportService())
+            .withImportingService(JobMetadata.getImportService())
+            .build();
 
     try {
       exportSignalHandlerProvider.get().sendSignal(signalRequest, exportAuthData, monitor);

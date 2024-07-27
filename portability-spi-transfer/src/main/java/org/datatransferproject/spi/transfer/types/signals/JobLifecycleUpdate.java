@@ -26,7 +26,7 @@ public abstract class JobLifecycleUpdate {
     JOB_ENDED /* DO NOT MERGE - renmae from JOB_COMPLETED */
   }
 
-  public static JobLifecycleUpdate.Builder builder() {
+  public static Builder builder() {
     return AutoValue_JobLifecycleUpdate.Builder().setJobLifecycle(JobLifecycle.JOB_UNSPECIFIED);
   }
 
@@ -58,7 +58,7 @@ public abstract class JobLifecycleUpdate {
   public abstract Optional<JobLifecycleEnd> jobLifecycleEnd();
 
   @AutoValue.Builder
-  public abstract class Builder {
+  public abstract static class Builder {
     abstract JobLifecycleUpdate autoBuild();
 
     public final JobLifecycleUpdate build() {

@@ -17,8 +17,6 @@
 package org.datatransferproject.spi.transfer.provider;
 
 import java.util.Objects;
-import java.util.UUID;
-import org.datatransferproject.spi.transfer.types.signals.SignalType;
 import org.datatransferproject.types.common.models.DataVertical;
 
 public class SignalRequest {
