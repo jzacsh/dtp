@@ -2,9 +2,9 @@ package org.datatransferproject.spi.transfer.types.signals;
 
 import static com.google.common.base.Preconditions.checkState;
 
-import org.datatransferproject.spi.transfer.types.FailureReason;
 import com.google.auto.value.AutoValue;
 import java.util.Optional;
+import org.datatransferproject.spi.transfer.types.FailureReasons;
 
 /* DO NOT MERGE - document me */
 @AutoValue
@@ -20,7 +20,6 @@ public abstract class JobLifecycleEnd {
     END_PARTIAL,
   };
 
-
   public abstract Optional<EndReason> endReason();
 
   /**
@@ -29,7 +28,7 @@ public abstract class JobLifecycleEnd {
    * <p>Note: DTP's current implementation is such that this likely means the job alsoeended
    * abruptly.
    */
-  public abstract Optional<FailureReason> failureCode();
+  public abstract Optional<FailureReasons> failureCode();
 
   public static JobLifecycleEnd ofPerfect() {
     return builder().setEndReason(EndReason.END_PERFECT).build();
@@ -47,7 +46,7 @@ public abstract class JobLifecycleEnd {
     return builder().setEndReason(EndReason.END_PARTIAL).build();
   }
 
-  public static JobLifecycleEnd ofPartial(FailureReason failureCode) {
+  public static JobLifecycleEnd ofPartial(FailureReasons failureCode) {
     return builder().setEndReason(EndReason.END_PARTIAL).setFailureCode(failureCode).build();
   }
 
@@ -62,7 +61,7 @@ public abstract class JobLifecycleEnd {
   public abstract static class Builder {
     /* DO NOT MERGE - fill out anything else from PR discussions and/or doc */
 
-    abstract Builder setFailureCode(FailureReason failureCode);
+    abstract Builder setFailureCode(FailureReasons failureCode);
 
     abstract Builder setEndReason(EndReason endReason);
 
@@ -74,14 +73,14 @@ public abstract class JobLifecycleEnd {
           !jobLifecycleEnd.hasEndReason(EndReason.END_REASON_UNSPECIFIED),
           "either end reason should be ommitted, or it should be specified to something logical");
       checkState(
-          !jobLifecycleEnd.failureCode.isPresent() ||
-              !jobLifecycleEnd.hasEndReason(EndReason.END_PERFECT),
+          !jobLifecycleEnd.failureCode().isPresent()
+              || !jobLifecycleEnd.hasEndReason(EndReason.END_PERFECT),
           "job cannot have ended perfectly but also have an failure code");
       return jobLifecycleEnd;
     }
   }
 
   private boolean hasEndReason(EndReason target) {
-    return endReason().isPresent() && endReason().get().equals(target),
+    return endReason().isPresent() && endReason().get().equals(target);
   }
 }
