@@ -17,20 +17,15 @@
 package org.datatransferproject.spi.transfer.provider;
 
 import java.io.IOException;
-import java.util.UUID;
 import org.datatransferproject.api.launcher.Monitor;
 import org.datatransferproject.spi.transfer.types.CopyExceptionWithFailureReason;
-import org.datatransferproject.spi.transfer.types.signals.SignalType;
 import org.datatransferproject.types.transfer.auth.AuthData;
-import org.datatransferproject.types.transfer.auth.TokensAndUrlAuthData;
 import org.datatransferproject.types.transfer.retry.RetryException;
 
-/**
- * Signals the status of the Job to the corresponding Service.
- */
+/** Signals the status of the Job to the corresponding Service. */
 public interface SignalHandler<A extends AuthData> {
   default void sendSignal(SignalRequest signalRequest, AuthData authData, Monitor monitor)
-    throws CopyExceptionWithFailureReason, IOException, RetryException {
+      throws CopyExceptionWithFailureReason, IOException, RetryException {
     monitor.info(() -> "Default Signaller::" + signalRequest.toString());
   }
 }
