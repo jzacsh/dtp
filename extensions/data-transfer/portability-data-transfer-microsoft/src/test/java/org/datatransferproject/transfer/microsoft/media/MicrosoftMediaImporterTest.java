@@ -65,8 +65,8 @@ import org.junit.Test;
 public class MicrosoftMediaImporterTest {
 
   private static final int CHUNK_SIZE = 32000 * 1024; // 32000KiB
-  private final static String BASE_URL = "https://www.baseurl.com";
-  private final static UUID uuid = UUID.randomUUID();
+  private static final String BASE_URL = "https://www.baseurl.com";
+  private static final UUID uuid = UUID.randomUUID();
 
   MicrosoftMediaImporter importer;
   OkHttpClient client;
@@ -94,8 +94,9 @@ public class MicrosoftMediaImporterTest {
     when(credentialFactory.refreshCredential(any())).thenReturn(credential);
     credential.setAccessToken("acc");
     credential.setExpirationTimeMilliseconds(null);
-    importer = new MicrosoftMediaImporter(
-        BASE_URL, client, objectMapper, jobStore, monitor, credentialFactory);
+    importer =
+        new MicrosoftMediaImporter(
+            BASE_URL, client, objectMapper, jobStore, monitor, credentialFactory);
   }
 
   @Test
@@ -103,25 +104,30 @@ public class MicrosoftMediaImporterTest {
     List<MediaAlbum> albums =
         ImmutableList.of(new MediaAlbum("id1", "album1.", "This is a fake albumb"));
 
-    MediaContainerResource data = new MediaContainerResource(albums, null /*phots*/,
-        null /*videos*/);
+    MediaContainerResource data =
+        new MediaContainerResource(albums, null /*phots*/, null /*videos*/);
 
     Call call = mock(Call.class);
-    doReturn(call).when(client).newCall(argThat((Request r) -> {
-      String body = "";
+    doReturn(call)
+        .when(client)
+        .newCall(
+            argThat(
+                (Request r) -> {
+                  String body = "";
 
-      try {
-        final Buffer buffer = new Buffer();
-        r.body().writeTo(buffer);
-        body = buffer.readUtf8();
-      } catch (IOException e) {
-        return false;
-      }
+                  try {
+                    final Buffer buffer = new Buffer();
+                    r.body().writeTo(buffer);
+                    body = buffer.readUtf8();
+                  } catch (IOException e) {
+                    return false;
+                  }
 
-      return r.url().toString().equals(
-          "https://www.baseurl.com/v1.0/me/drive/special/photos/children")
-          && body.contains("album1_");
-    }));
+                  return r.url()
+                          .toString()
+                          .equals("https://www.baseurl.com/v1.0/me/drive/special/photos/children")
+                      && body.contains("album1_");
+                }));
     Response response = mock(Response.class);
     ResponseBody body = mock(ResponseBody.class);
     when(body.bytes())
@@ -144,14 +150,18 @@ public class MicrosoftMediaImporterTest {
     List<MediaAlbum> albums =
         ImmutableList.of(new MediaAlbum("id1", "album1.", "This is a fake albumb"));
 
-    MediaContainerResource data = new MediaContainerResource(albums, null /*photos*/,
-        null /*videos*/);
+    MediaContainerResource data =
+        new MediaContainerResource(albums, null /*photos*/, null /*videos*/);
 
     Call call = mock(Call.class);
-    doReturn(call).when(client).newCall(
-        argThat((Request r)
-            -> r.url().toString().equals(
-            "https://www.baseurl.com/v1.0/me/drive/special/photos/children")));
+    doReturn(call)
+        .when(client)
+        .newCall(
+            argThat(
+                (Request r) ->
+                    r.url()
+                        .toString()
+                        .equals("https://www.baseurl.com/v1.0/me/drive/special/photos/children")));
     Response response = mock(Response.class);
     ResponseBody body = mock(ResponseBody.class);
     when(body.bytes())
@@ -165,9 +175,11 @@ public class MicrosoftMediaImporterTest {
     when(response.body()).thenReturn(body);
     when(call.execute()).thenReturn(response);
 
-    assertThrows(PermissionDeniedException.class, () -> {
-      ImportResult result = importer.importItem(uuid, executor, authData, data);
-    });
+    assertThrows(
+        PermissionDeniedException.class,
+        () -> {
+          ImportResult result = importer.importItem(uuid, executor, authData, data);
+        });
   }
 
   @Test
@@ -175,10 +187,12 @@ public class MicrosoftMediaImporterTest {
     List<MediaAlbum> albums =
         ImmutableList.of(new MediaAlbum("id1", "albumb1", "This is a fake albumb"));
 
-    List<PhotoModel> photos = ImmutableList.of(
-        new PhotoModel("Pic1", "http://fake.com/1.jpg", "A pic", "image/jpg", "p1", "id1", true),
-        new PhotoModel(
-            "Pic2", "https://fake.com/2.png", "fine art", "image/png", "p2", "id1", true));
+    List<PhotoModel> photos =
+        ImmutableList.of(
+            new PhotoModel(
+                "Pic1", "http://fake.com/1.jpg", "A pic", "image/jpg", "p1", "id1", true),
+            new PhotoModel(
+                "Pic2", "https://fake.com/2.png", "fine art", "image/png", "p2", "id1", true));
     when(jobStore.getStream(uuid, "http://fake.com/1.jpg"))
         .thenReturn(new InputStreamWrapper(new ByteArrayInputStream(new byte[CHUNK_SIZE])));
     when(jobStore.getStream(uuid, "https://fake.com/2.png"))
@@ -186,10 +200,14 @@ public class MicrosoftMediaImporterTest {
     MediaContainerResource data = new MediaContainerResource(albums, photos, null /*videos*/);
 
     Call call = mock(Call.class);
-    doReturn(call).when(client).newCall(
-        argThat((Request r)
-            -> r.url().toString().equals(
-            "https://www.baseurl.com/v1.0/me/drive/special/photos/children")));
+    doReturn(call)
+        .when(client)
+        .newCall(
+            argThat(
+                (Request r) ->
+                    r.url()
+                        .toString()
+                        .equals("https://www.baseurl.com/v1.0/me/drive/special/photos/children")));
     Response response = mock(Response.class);
     ResponseBody body = mock(ResponseBody.class);
     when(body.bytes())
@@ -203,35 +221,41 @@ public class MicrosoftMediaImporterTest {
     when(call.execute()).thenReturn(response);
 
     Call call2 = mock(Call.class);
-    doReturn(call2).when(client).newCall(
-        argThat((Request r) -> r.url().toString().contains("createUploadSession")));
+    doReturn(call2)
+        .when(client)
+        .newCall(argThat((Request r) -> r.url().toString().contains("createUploadSession")));
     Response response2 = mock(Response.class);
     ResponseBody body2 = mock(ResponseBody.class);
     when(body2.bytes())
-        .thenReturn(ResponseBody
-            .create(MediaType.parse("application/json"),
-                "{\"uploadUrl\": \"https://scalia.com/link\"}")
-            .bytes());
+        .thenReturn(
+            ResponseBody.create(
+                    MediaType.parse("application/json"),
+                    "{\"uploadUrl\": \"https://scalia.com/link\"}")
+                .bytes());
     when(body2.string())
-        .thenReturn(ResponseBody
-            .create(MediaType.parse("application/json"),
-                "{\"uploadUrl\": \"https://scalia.com/link\"}")
-            .string());
+        .thenReturn(
+            ResponseBody.create(
+                    MediaType.parse("application/json"),
+                    "{\"uploadUrl\": \"https://scalia.com/link\"}")
+                .string());
     when(response2.code()).thenReturn(200);
     when(response2.body()).thenReturn(body2);
     when(call2.execute()).thenReturn(response2);
 
     Call call3 = mock(Call.class);
-    doReturn(call3).when(client).newCall(
-        argThat((Request r) -> r.url().toString().contains("scalia.com/link")));
+    doReturn(call3)
+        .when(client)
+        .newCall(argThat((Request r) -> r.url().toString().contains("scalia.com/link")));
     Response response3 = mock(Response.class);
     ResponseBody body3 = mock(ResponseBody.class);
     when(body3.bytes())
-        .thenReturn(ResponseBody.create(MediaType.parse("application/json"), "{\"id\": \"rand1\"}")
-            .bytes());
+        .thenReturn(
+            ResponseBody.create(MediaType.parse("application/json"), "{\"id\": \"rand1\"}")
+                .bytes());
     when(body3.string())
-        .thenReturn(ResponseBody.create(MediaType.parse("application/json"), "{\"id\": \"rand1\"}")
-            .string());
+        .thenReturn(
+            ResponseBody.create(MediaType.parse("application/json"), "{\"id\": \"rand1\"}")
+                .string());
     when(response3.code()).thenReturn(200);
     when(response3.body()).thenReturn(body3);
     when(call3.execute()).thenReturn(response3);

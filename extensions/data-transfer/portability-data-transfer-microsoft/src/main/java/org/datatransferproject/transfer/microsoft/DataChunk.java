@@ -6,15 +6,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
-  This utility class allows us to break up an InputStream into multiple chunks
-  for part-by-part upload to a service, for example to be consumed in an upload session.
-*/
+ * This utility class allows us to break up an InputStream into multiple chunks for part-by-part
+ * upload to a service, for example to be consumed in an upload session.
+ */
 public class DataChunk {
   private static final int CHUNK_SIZE = 32000 * 1024; // 32000KiB
 
   private final byte[] data;
   private final int size;
   private final int rangeStart;
+
   public DataChunk(byte[] data, int size, int rangeStart) {
     this.data = data;
     this.size = size;
@@ -66,5 +67,4 @@ public class DataChunk {
     }
     return chunksToSend;
   }
-
 }
