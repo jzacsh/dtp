@@ -133,11 +133,11 @@ public class MicrosoftTransferExtension implements TransferExtension {
     importBuilder.put(
         CALENDAR,
         new MicrosoftCalendarImporter(BASE_GRAPH_URL, client, mapper, transformerService));
+    MicrosoftMediaImporter mediaImporter = new MicrosoftMediaImporter(BASE_GRAPH_URL, client, mapper, jobStore, monitor,
+          credentialFactory, jobFileStream, maxWritesPerSecond);
+    importBuilder.put(MEDIA, mediaImporter);
     importBuilder.put(
-        PHOTOS, new MicrosoftPhotosImporter(BASE_GRAPH_URL, client, mapper, jobStore, monitor,
-          credentialFactory, jobFileStream));
-    importBuilder.put(MEDIA, new MicrosoftMediaImporter(BASE_GRAPH_URL, client, mapper, jobStore, monitor,
-          credentialFactory, jobFileStream, maxWritesPerSecond));
+        PHOTOS, MicrosoftPhotosImporter.ofMediaImporter(mediaImporter));
     importerMap = importBuilder.build();
 
     ImmutableMap.Builder<DataVertical, Exporter> exporterBuilder = ImmutableMap.builder();
