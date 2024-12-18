@@ -279,15 +279,10 @@ public class MicrosoftMediaImporter
   }
 
   /**
-   * Forms the URL to create an upload session.
+   * Forms the URL to create an upload session depending on whether item is a
+   * folder or a file.
    *
-   * <p>Creates an upload session path for one of two cases:
-   *
-   * <ul>
-   *   <li>- 1) POST to /me/drive/items/{folder_id}:/{file_name}:/createUploadSession
-   *   <li>- 2) GET {uploadurl} from
-   *       /me/drive/items/root:/photos-video/{file_name}:/createUploadSession
-   * </ul>
+   * <p>See https://learn.microsoft.com/en-us/onedrive/developer/rest-api/resources/driveitem?view=odsp-graph-online
    */
   private Request.Builder buildCreateUploadSessionPath(
       DownloadableFile item, IdempotentImportExecutor idempotentImportExecutor) {
@@ -299,7 +294,6 @@ public class MicrosoftMediaImporter
       createSessionUrl =
           String.format(uploadMediaUrlTemplate, oneDriveFolderId, item.getName(), UPLOAD_PARAMS);
     }
-
     return new Request.Builder().url(createSessionUrl);
   }
 
